@@ -1,0 +1,6 @@
+Flask==3.1.0
+flask-sock==0.7.0
+protobuf==5.29.3
+requests==2.32.3
+gtfs-realtime-bindings==1.0.0
+websockets==15.0

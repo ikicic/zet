@@ -1,0 +1,35 @@
+{
+  "name": "zet",
+  "version": "0.0.1",
+  "description": "Public transportation status viewer",
+  "main": "index.js",
+  "scripts": {
+    "start": "webpack serve",
+    "build": "webpack --mode production"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikicic/zet.git"
+  },
+  "author": "Ivica Kičić",
+  "license": "BSD-3-Clause",
+  "homepage": "https://github.com/ikicic/zet",
+  "devDependencies": {
+    "@types/maplibre-gl": "^1.13.2",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "css-loader": "^7.1.2",
+    "html-webpack-plugin": "^5.6.3",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.7.3",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.0"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
