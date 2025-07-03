@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MarkerCache, Marker } from "./Markers";
+import "./Map.css";
 
 interface Vehicle {
   id: string;
@@ -77,10 +78,114 @@ function updateTrajectories(map: maplibregl.Map, vehicles: Vehicle[]) {
   });
 }
 
+function ExternalLink(props: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={props.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="link"
+    >
+      {props.children}
+    </a>
+  );
+}
+
+function AttributionOverlay({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [onClose]);
+
+  const handleBackgroundClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      onClose();
+    }
+  };
+
+  return (
+    <div className="attribution-overlay" onClick={handleBackgroundClick}>
+      <div className="attribution-content">
+        <button className="close-button" onClick={onClose}>
+          ✕
+        </button>
+        <h3>ZET uživo</h3>
+        <p>
+          Sadrži informacije tijela javne vlasti u skladu s{" "}
+          <ExternalLink href="https://data.gov.hr/otvorena-dozvola">
+            Otvorenom dozvolom
+          </ExternalLink>
+          .<br />
+          Podaci o vozilima:{" "}
+          <ExternalLink href="https://www.zet.hr/odredbe/datoteke-u-gtfs-formatu/669">
+            ZET GTFS
+          </ExternalLink>
+        </p>
+        <p>
+          Interaktivna karta:{" "}
+          <ExternalLink href="https://maplibre.org/">
+            MapLibre GL JS
+          </ExternalLink>
+        </p>
+        <p>
+          Podaci za kartu:{" "}
+          <ExternalLink href="https://openfreemap.org/">
+            OpenFreeMap
+          </ExternalLink>
+          {" | "}
+          <ExternalLink href="https://openmaptiles.org/">
+            OpenMapTiles
+          </ExternalLink>
+          {" | "}
+          <ExternalLink href="https://www.openstreetmap.org/">
+            OpenStreetMap
+          </ExternalLink>
+        </p>
+        <p>
+          Izvorni kod:{" "}
+          <ExternalLink href="https://github.com/ikicic/zet">
+            GitHub
+          </ExternalLink>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+class AttributionControl {
+  private onShowAttribution: () => void;
+
+  constructor(onShowAttribution: () => void) {
+    this.onShowAttribution = onShowAttribution;
+  }
+
+  onAdd() {
+    const container = document.createElement("div");
+    container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+
+    const button = document.createElement("button");
+    button.className = "maplibregl-ctrl-icon";
+    button.innerHTML = "ℹ";
+    button.title = "Informacije";
+    button.addEventListener("click", this.onShowAttribution);
+
+    container.appendChild(button);
+    return container;
+  }
+
+  onRemove() {}
+}
+
 export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState<boolean>(false);
+  const [showAttribution, setShowAttribution] = useState<boolean>(false);
   const markerCache = useRef<MarkerCache>(new MarkerCache());
 
   // Initialize map
@@ -121,6 +226,8 @@ export function Map() {
         trackUserLocation: true,
       })
     );
+
+    map.addControl(new AttributionControl(() => setShowAttribution(true)));
 
     // Initialize trajectory source and layer
     map.on("load", () => {
@@ -246,5 +353,12 @@ export function Map() {
     };
   }, [mapLoaded]);
 
-  return <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />;
+  return (
+    <>
+      <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
+      {showAttribution && (
+        <AttributionOverlay onClose={() => setShowAttribution(false)} />
+      )}
+    </>
+  );
 }
