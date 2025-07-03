@@ -4,6 +4,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { MarkerCache, Marker } from "./Markers";
 import "./Map.css";
 
+// SVG content from maplibre-gl/src/css/svg/maplibregl-ctrl-attrib.svg
+const infoIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill-rule="evenodd" viewBox="0 0 20 20" style="fill: #444; margin-top: 2px;">
+  <path d="M4 10a6 6 0 1 0 12 0 6 6 0 1 0-12 0m5-3a1 1 0 1 0 2 0 1 1 0 1 0-2 0m0 3a1 1 0 1 1 2 0v3a1 1 0 1 1-2 0"/>
+</svg>`;
+
 interface Vehicle {
   id: string;
   routeId: number;
@@ -170,7 +175,7 @@ class AttributionControl {
 
     const button = document.createElement("button");
     button.className = "maplibregl-ctrl-icon";
-    button.innerHTML = "ℹ";
+    button.innerHTML = infoIconSvg;
     button.title = "Informacije";
     button.addEventListener("click", this.onShowAttribution);
 
