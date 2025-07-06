@@ -10,7 +10,6 @@ const infoIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="
 </svg>`;
 
 interface Vehicle {
-  id: string;
   routeId: number;
   lat: number[];
   lon: number[];
@@ -71,7 +70,6 @@ function updateTrajectories(map: maplibregl.Map, vehicles: Vehicle[]) {
       coordinates: vehicle.lon.map((lon, index) => [lon, vehicle.lat[index]]),
     },
     properties: {
-      id: vehicle.id,
       routeId: vehicle.routeId,
     },
   }));

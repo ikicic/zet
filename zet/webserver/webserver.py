@@ -49,8 +49,8 @@ STATIC_REFERENCE_SYSTEM = StaticReferenceSystem(
 
 @dataclass
 class ParsedVehicle:
-    id: str
     route_id: int
+    trip_id: str
     timestamp: int
     lat: float
     lon: float
@@ -83,8 +83,8 @@ class ParsedFeed:
     def _parse_vehicle(vehicle: dict) -> ParsedVehicle | None:
         try:
             return ParsedVehicle(
-                id=vehicle['vehicle']['id'],
                 route_id=int(vehicle['trip']['routeId']),
+                trip_id=vehicle['trip']['tripId'],
                 timestamp=int(vehicle['timestamp']),
                 lat=vehicle['position']['latitude'],
                 lon=vehicle['position']['longitude'],
@@ -96,7 +96,6 @@ class ParsedFeed:
 
 @dataclass
 class Vehicle:
-    id: str
     route_id: int
     timestamp: int
     lat: list[float]  # lat[0] is the newest position
@@ -112,7 +111,6 @@ class Vehicle:
 
         The update() method must be called to add the first position."""
         return Vehicle(
-            id=vehicle.id,
             route_id=vehicle.route_id,
             timestamp=vehicle.timestamp,
             lat=[],
@@ -149,7 +147,6 @@ class Vehicle:
         else:
             deg = None
         return {
-            'id': self.id,
             'routeId': self.route_id,
             'timestamp': self.timestamp,
             'lat': self.lat[:TRAJECTORY_OUTPUT_LENGTH][::-1],
@@ -175,7 +172,6 @@ class Vehicle:
 
         static = ref.static
         return {
-            'ids': [v.id for v in vehicles],
             'routeIds': [v.route_id for v in vehicles],
             'timestamps': [ref.ref_timestamp - v.timestamp for v in vehicles],
             'lats': [compress_coord(static.ref_lat, v.lat) for v in vehicles],
@@ -193,10 +189,10 @@ class State:
             vehicle.no_update_counter += 1
 
         for vehicle in feed.vehicles:
-            v = self.vehicles.get(vehicle.id)
+            v = self.vehicles.get(vehicle.trip_id)
             if v is None:
                 v = Vehicle.from_parsed_vehicle(vehicle)
-                self.vehicles[vehicle.id] = v
+                self.vehicles[vehicle.trip_id] = v
             v.update(vehicle)
 
         # Remove vehicles not in last 30 feeds.
