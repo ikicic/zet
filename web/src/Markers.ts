@@ -31,10 +31,11 @@ export interface Marker {
 export interface MarkerProperties {
   label: string;
   directionDegrees: number | null;
+  highlighted: boolean;
 }
 
 function markerToImageKey(marker: MarkerProperties): MarkerKey {
-  return `marker-${marker.label}-${marker.directionDegrees}`;
+  return `marker-${marker.label}-${marker.directionDegrees}-${marker.highlighted}`;
 }
 
 // Helper function to normalize an angle to the range [-PI, PI)
@@ -107,9 +108,17 @@ function renderMarker(
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
   const TRAM_COLOR = "hsl(207, 90%, 54%)";
+  const HIGHLIGHTED_TRAM_COLOR = "hsl(7, 89.80%, 53.90%)";
   const BUS_COLOR = "hsl(212, 80%, 42%)";
+  const HIGHLIGHTED_BUS_COLOR = "hsl(12, 80.40%, 42.00%)";
   const isTram = marker.label.length < 3;
-  const fillColor = isTram ? TRAM_COLOR : BUS_COLOR;
+  const fillColor = marker.highlighted
+    ? isTram
+      ? HIGHLIGHTED_TRAM_COLOR
+      : HIGHLIGHTED_BUS_COLOR
+    : isTram
+    ? TRAM_COLOR
+    : BUS_COLOR;
 
   ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
   ctx.shadowBlur = SHADOW_BLUR;
