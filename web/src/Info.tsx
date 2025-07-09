@@ -43,6 +43,9 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
         </button>
         <h3>ZET uživo</h3>
         <p>
+          <i>Napomena: Prikazivanje trasa vozila je eksperimentalno!</i>
+        </p>
+        <p>
           Sadrži informacije tijela javne vlasti u skladu s{" "}
           <ExternalLink href="https://data.gov.hr/otvorena-dozvola">
             Otvorenom dozvolom
