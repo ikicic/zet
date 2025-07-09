@@ -23,7 +23,7 @@ the live data:
 In yet another terminal, open the HTTP server:
 
 ```
-./venv/bin/python -m zet.webserver.webserver
+ZET_DEV=1 ./venv/bin/python -m zet.webserver.webserver
 ```
 
 Then, open http://localhost:3000/
