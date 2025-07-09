@@ -2,14 +2,38 @@
 
 import maplibregl from "maplibre-gl";
 
-type ImageKey = string;
+type MarkerKey = string;
+
+// A class used for the click event, to determine whether a marker is opaque
+// under the cursor. For now, we only support ellipses and ignore the direction
+// extrusion.
+export class MarkerShape {
+  private rx2: number;
+  private ry2: number;
+
+  constructor(rx: number, ry: number) {
+    this.rx2 = rx * rx;
+    this.ry2 = ry * ry;
+  }
+
+  // Given the offset from the center of the marker image, return true if the
+  // point is within the shape.
+  isWithinShape(dx: number, dy: number): boolean {
+    return dx * dx * this.ry2 + dy * dy * this.rx2 <= this.rx2 * this.ry2;
+  }
+}
 
 export interface Marker {
+  key: MarkerKey;
+  shape: MarkerShape;
+}
+
+export interface MarkerProperties {
   label: string;
   directionDegrees: number | null;
 }
 
-function markerToImageKey(marker: Marker): string {
+function markerToImageKey(marker: MarkerProperties): MarkerKey {
   return `marker-${marker.label}-${marker.directionDegrees}`;
 }
 
@@ -54,8 +78,8 @@ function calculateSimplifiedTeardropRadiusAtAngle(
 }
 
 function renderMarker(
-  marker: Marker
-): [HTMLCanvasElement, CanvasRenderingContext2D] {
+  marker: MarkerProperties
+): [HTMLCanvasElement, CanvasRenderingContext2D, MarkerShape] {
   const canvas = document.createElement("canvas");
   const PIXEL_RATIO = window.devicePixelRatio;
   const SHADOW_BLUR = 3 * PIXEL_RATIO;
@@ -139,23 +163,29 @@ function renderMarker(
   ctx.shadowOffsetY = 0;
   ctx.fillText(marker.label, cx, cy);
 
-  return [canvas, ctx];
+  return [canvas, ctx, new MarkerShape(ehw / PIXEL_RATIO, ehh / PIXEL_RATIO)];
 }
 
-export class MarkerCache {
-  private cache: Map<string, ImageKey> = new Map();
+export class MarkerManager {
+  private markers: Map<MarkerKey, Marker> = new Map();
 
-  getOrCreate(map: maplibregl.Map, marker: Marker): ImageKey {
-    const key = markerToImageKey(marker);
-    const fromCache = this.cache.get(key);
+  getOrCreate(map: maplibregl.Map, markerProperties: MarkerProperties): Marker {
+    const key = markerToImageKey(markerProperties);
+    const fromCache = this.markers.get(key);
     if (fromCache) {
       return fromCache;
     }
-    const [canvas, ctx] = renderMarker(marker);
+    const [canvas, ctx, markerShape] = renderMarker(markerProperties);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const pixelRatio = window.devicePixelRatio;
     map.addImage(key, imageData, { pixelRatio });
-    this.cache.set(key, key);
-    return key;
+    const marker = { key: key, shape: markerShape };
+    this.markers.set(key, marker);
+    return marker;
+  }
+
+  getMarkerShape(markerKey: MarkerKey): MarkerShape | null {
+    const marker = this.markers.get(markerKey);
+    return marker ? marker.shape : null;
   }
 }

@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { MarkerCache, Marker } from "./Markers";
+import { MarkerManager, MarkerProperties } from "./Markers";
+import {
+  StaticData,
+  CompressedStaticData,
+  Vehicle,
+  CompressedRealTimeState,
+  decompressRealTimeState,
+  RealTimeState,
+  decompressStaticData,
+} from "./Data";
 import "./Map.css";
 
 // SVG content from maplibre-gl/src/css/svg/maplibregl-ctrl-attrib.svg
@@ -9,18 +18,21 @@ const infoIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="
   <path d="M4 10a6 6 0 1 0 12 0 6 6 0 1 0-12 0m5-3a1 1 0 1 0 2 0 1 1 0 1 0-2 0m0 3a1 1 0 1 1 2 0v3a1 1 0 1 1-2 0"/>
 </svg>`;
 
-interface Vehicle {
-  routeId: number;
-  lat: number[];
-  lon: number[];
-  timestamp: number;
-  directionDegrees: number | null;
+interface LoadedStaticData {
+  key: string;
+  data: StaticData;
+}
+
+function getUrl(schema: string, secureSchema: string, path: string) {
+  return window.location.protocol === "https:"
+    ? `${secureSchema}://${window.location.host}/${path}`
+    : `${schema}://${window.location.hostname}:5000/${path}`;
 }
 
 function updateMarkers(
   map: maplibregl.Map,
   vehicles: Vehicle[],
-  markerCache: MarkerCache
+  markerManager: MarkerManager
 ) {
   const source = map.getSource("custom-markers") as maplibregl.GeoJSONSource;
   const features: GeoJSON.Feature[] = [];
@@ -38,11 +50,15 @@ function updateMarkers(
     } else {
       deg = null;
     }
-    const marker: Marker = {
+    const markerProperties: MarkerProperties = {
       label: vehicle.routeId.toString(),
       directionDegrees: deg,
     };
 
+    if (vehicle.shapeId == null) {
+      return;
+    }
+    const marker = markerManager.getOrCreate(map, markerProperties);
     features.push({
       type: "Feature",
       geometry: {
@@ -50,7 +66,8 @@ function updateMarkers(
         coordinates: coord,
       },
       properties: {
-        icon: markerCache.getOrCreate(map, marker),
+        markerKey: marker.key,
+        shapeId: vehicle.shapeId,
         zOrder: -vehicle.routeId,
       },
     });
@@ -184,12 +201,106 @@ class AttributionControl {
   onRemove() {}
 }
 
+async function updateSelectedShape(
+  map: maplibregl.Map,
+  selectedShapeId: string | null,
+  loadedStaticData: LoadedStaticData | null,
+  latestStaticKey: string,
+  setLoadedStaticData: (data: LoadedStaticData) => void
+) {
+  const source = map.getSource("selected-shape") as maplibregl.GeoJSONSource;
+
+  if (selectedShapeId == null) {
+    source.setData({
+      type: "FeatureCollection",
+      features: [],
+    });
+    return null;
+  }
+  let staticData: StaticData;
+  if (loadedStaticData == null || loadedStaticData.key !== latestStaticKey) {
+    const url = getUrl("http", "https", `static/${latestStaticKey}`);
+    const staticDataResponse = await fetch(url);
+    const compressedStaticData: CompressedStaticData =
+      await staticDataResponse.json();
+    staticData = decompressStaticData(compressedStaticData);
+    setLoadedStaticData({ key: latestStaticKey, data: staticData });
+  } else {
+    staticData = loadedStaticData.data;
+  }
+  const shape = staticData.shapes[selectedShapeId];
+  let features: GeoJSON.Feature[] = [];
+  if (shape != null) {
+    // Draw a polyline from the first shape point to the last shape point.
+    features = [
+      {
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: shape.lons.map((lon, index) => [lon, shape.lats[index]]),
+        },
+        properties: {},
+      },
+    ];
+  }
+  source.setData({ type: "FeatureCollection", features: features });
+}
+
+function isWithinMarker(
+  map: maplibregl.Map,
+  markerManager: MarkerManager,
+  feature: GeoJSON.Feature,
+  clickPoint: { x: number; y: number }
+): boolean {
+  const coordinates = (feature.geometry as GeoJSON.Point).coordinates;
+  const markerPixel = map.project({
+    lng: coordinates[0],
+    lat: coordinates[1],
+  });
+  const dx = clickPoint.x - markerPixel.x;
+  const dy = clickPoint.y - markerPixel.y;
+  const markerKey = feature.properties?.markerKey;
+  if (markerKey == null) {
+    return false;
+  }
+  const markerShape = markerManager.getMarkerShape(markerKey);
+  if (markerShape == null) {
+    return false;
+  }
+  return markerShape.isWithinShape(dx, dy);
+}
+
+function findSelectedShape(
+  map: maplibregl.Map,
+  markerManager: MarkerManager,
+  features: GeoJSON.Feature[],
+  clickPoint: { x: number; y: number }
+): string | null {
+  // Select the feature with the highest zOrder.
+  let topFeature: GeoJSON.Feature | null = null;
+  let topZOrder: number | null = null;
+  for (const feature of features) {
+    if (topZOrder != null && feature.properties?.zOrder < topZOrder) {
+      continue;
+    }
+    if (isWithinMarker(map, markerManager, feature, clickPoint)) {
+      topFeature = feature;
+      topZOrder = feature.properties?.zOrder;
+    }
+  }
+  return topFeature?.properties?.shapeId ?? null;
+}
+
 export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState<boolean>(false);
   const [showAttribution, setShowAttribution] = useState<boolean>(false);
-  const markerCache = useRef<MarkerCache>(new MarkerCache());
+  const markerManager = useRef<MarkerManager>(new MarkerManager());
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+  const [latestStaticKey, setLatestStaticKey] = useState<string | null>(null);
+  const [loadedStaticData, setLoadedStaticData] =
+    useState<LoadedStaticData | null>(null);
 
   // Initialize map
   useEffect(() => {
@@ -248,6 +359,7 @@ export function Map() {
 
       map.addSource("custom-markers", emptyGeoJSON);
       map.addSource("trajectories", emptyGeoJSON);
+      map.addSource("selected-shape", emptyGeoJSON);
 
       map.addLayer({
         id: "trajectory-lines",
@@ -266,7 +378,7 @@ export function Map() {
         type: "symbol",
         source: "custom-markers",
         layout: {
-          "icon-image": ["get", "icon"],
+          "icon-image": ["get", "markerKey"],
           "icon-size": 1,
           "icon-allow-overlap": true,
           "symbol-sort-key": ["get", "zOrder"],
@@ -274,6 +386,53 @@ export function Map() {
       });
       // Hopefully this disabled symbol fade in/out.
       map.setPaintProperty("custom-markers", "icon-opacity", 1.0);
+
+      map.addLayer({
+        id: "selected-shape",
+        type: "line",
+        source: "selected-shape",
+        paint: {
+          "line-color": "#000",
+          "line-width": 3,
+        },
+      });
+
+      map.on("click", "custom-markers", (e) => {
+        if (!e.features || e.features.length === 0) {
+          return;
+        }
+        const shapeId = findSelectedShape(
+          map,
+          markerManager.current,
+          e.features,
+          e.point
+        );
+        setSelectedShapeId(shapeId);
+      });
+
+      map.on("click", (e) => {
+        const features = map.queryRenderedFeatures(e.point, {
+          layers: ["custom-markers"],
+        });
+        const shapeId = findSelectedShape(
+          map,
+          markerManager.current,
+          features,
+          e.point
+        );
+        if (shapeId == null) {
+          setSelectedShapeId(shapeId);
+        }
+      });
+
+      // TODO: Precisely check whether the mouse cursor is over a marker.
+      map.on("mouseenter", "custom-markers", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+
+      map.on("mouseleave", "custom-markers", () => {
+        map.getCanvas().style.cursor = "";
+      });
 
       setMapLoaded(true);
     });
@@ -283,6 +442,19 @@ export function Map() {
       map.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!mapLoaded || mapRef.current == null || latestStaticKey == null) {
+      return;
+    }
+    updateSelectedShape(
+      mapRef.current,
+      selectedShapeId,
+      loadedStaticData,
+      latestStaticKey,
+      setLoadedStaticData
+    );
+  }, [selectedShapeId, latestStaticKey, loadedStaticData]);
 
   // WebSocket connection and updates with reconnection logic
   useEffect(() => {
@@ -299,10 +471,7 @@ export function Map() {
       }
 
       // Manually change to the dev websocket server port in http.
-      const url =
-        window.location.protocol === "https:"
-          ? `wss://${window.location.host}/ws`
-          : `ws://${window.location.hostname}:5000/ws`;
+      const url = getUrl("ws", "wss", "ws-v1");
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => {
@@ -311,11 +480,13 @@ export function Map() {
       });
 
       ws.addEventListener("message", (event) => {
-        const vehicles: Vehicle[] = JSON.parse(event.data);
+        const data: CompressedRealTimeState = JSON.parse(event.data);
+        const state: RealTimeState = decompressRealTimeState(data);
         if (mapRef.current) {
-          updateMarkers(mapRef.current, vehicles, markerCache.current);
-          updateTrajectories(mapRef.current, vehicles);
+          updateMarkers(mapRef.current, state.vehicles, markerManager.current);
+          updateTrajectories(mapRef.current, state.vehicles);
         }
+        setLatestStaticKey(state.latestStaticKey);
       });
 
       ws.addEventListener("close", () => {
