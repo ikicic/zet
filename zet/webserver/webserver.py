@@ -26,6 +26,7 @@ DIRECTION_THRESHOLD_METERS = 20
 app = Flask(__name__, static_folder='../static')
 sock = Sock(app)
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -303,6 +304,14 @@ class GtfsServer:
     async def fetch_data_from_fetcher(self):
         def process_message(fetcher_message):
             data = json.loads(fetcher_message)
+            kind = data.get('kind')
+            if kind == 'static':
+                logger.warning(f"Ignoring static data. Not yet implemented.")
+                return
+            if kind != 'realtime':
+                logger.error(f"Unknown kind: {kind}")
+                return
+
             raw_data = bytes.fromhex(data['gzipped_data'])
             raw_feed = gtfs_realtime_pb2.FeedMessage()
             raw_feed.ParseFromString(gzip.decompress(raw_data))
@@ -325,7 +334,8 @@ class GtfsServer:
         max_backoff_time = 60  # Maximum delay of 60 seconds.
         while True:
             try:
-                async with websockets.connect(self.fetcher_url) as websocket:
+                async with websockets.connect(
+                        self.fetcher_url, max_size=50*1024*1024) as websocket:
                     # Reset backoff time on successful connection
                     backoff_time = 1
                     while True:

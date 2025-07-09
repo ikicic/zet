@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from collections import OrderedDict
 
 import websockets
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 Data = str | bytes
 
 class WebSocketServer:
-    def __init__(self, port: int):
+    def __init__(self, port: int, kinds_order: list[str]):
         self.ws_port: int = port
         self.ws_server: websockets.Server | None = None
         self.clients: set[websockets.ServerConnection] = set()
@@ -21,15 +22,15 @@ class WebSocketServer:
         self.ws_thread.start()
 
         self.data_lock = threading.Lock()
-        self.current_data: Data | None = None
+        self.data: OrderedDict[str, list[Data]] = OrderedDict(
+            {kind: [] for kind in kinds_order})
         self.loop = None  # Store the event loop reference
 
-    # WebSocket server methods
     def start_ws_server(self):
         """Start the WebSocket server in the current thread."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        self.loop = loop  # Save the loop reference for later use
+        self.loop = loop
 
         async def start_server_coroutine():
             # Serve only to localhost.
@@ -50,24 +51,35 @@ class WebSocketServer:
         if self.ws_thread.is_alive():
             self.ws_thread.join(timeout=5)
 
-    def update_data(self, data: Data):
-        """Update the current data in a thread-safe manner."""
-        with self.data_lock:
-            self.current_data = data
+    def update_data(self, key: str, data: Data, max_history: int):
+        """Update the current data in a thread-safe manner.
 
-        self._notify_clients()
+        The key must be one of the keys in kinds_order.
+        """
+        with self.data_lock:
+            if key not in self.data:
+                raise ValueError(f"Key {key} not in data")
+            self.data[key].append(data)
+            if len(self.data[key]) > max_history:
+                self.data[key].pop(0)
+
+        self._notify_clients(key)
 
     async def _handle_client(
             self, websocket: websockets.ServerConnection):
         """Handle a client connection."""
         try:
-            with self.clients_lock:
-                self.clients.add(websocket)
             logger.info(f"Client connected. Total clients: {len(self.clients)}")
 
             with self.data_lock:
-                if self.current_data:
-                    await self._send_message_to_client(websocket, self.current_data)
+                for data in self.data.values():
+                    # Send all messages, in the order given in kinds_order,
+                    # then in the order they were added.
+                    for message in data:
+                        await self._send_message_to_client(websocket, message)
+
+            with self.clients_lock:
+                self.clients.add(websocket)
 
             async for message in websocket:
                 pass
@@ -89,16 +101,19 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Error sending message to client: {e}")
 
-    def _notify_clients(self):
+    def _notify_clients(self, key: str):
         """Notify all connected clients about a new snapshot."""
         with self.clients_lock:
             if not self.clients:
                 return
 
         with self.data_lock:
-            if not self.current_data:
+            if key not in self.data:
                 return
-            data = self.current_data
+            data = self.data[key]
+            if not data:
+                return
+            data = data[-1]
 
         # Use the stored event loop reference instead of trying to get the
         # current one
