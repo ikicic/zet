@@ -127,7 +127,7 @@ class WebSocketSnapshotServer(WebSocketServer):
 def fetch_url(url: str) -> bytes | None:
     """Fetch the URL and return the binary content."""
     try:
-        with urlopen(url) as response:
+        with urlopen(url, timeout=30) as response:
             return response.read()
     except Exception as e:
         logger.error(f"Error fetching URL: {e}")
