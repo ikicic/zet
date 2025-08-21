@@ -328,7 +328,7 @@ class Fetcher:
             else:
                 logger.error("No data fetched. Skipping snapshot.")
                 # If fetching failed, use exponential backoff
-                current_delay = min(current_delay * 2, 60)
+                current_delay = min(current_delay * 2, 20)
 
             self.sleep(current_delay)
 

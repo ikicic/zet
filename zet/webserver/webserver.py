@@ -495,8 +495,8 @@ class GtfsServer:
                 logger.error(f"Error processing {kind} message: {e}")
 
 
-        backoff_time = 1       # Restart at first with a 1-second delay.
-        max_backoff_time = 60  # Maximum delay of 60 seconds.
+        backoff_time = 1
+        max_backoff_time = 4
         while True:
             try:
                 async with websockets.connect(
@@ -510,8 +510,7 @@ class GtfsServer:
                 logger.error(f"Connection error: {e}. "
                              f"Reconnecting in {backoff_time} seconds...")
                 await asyncio.sleep(backoff_time)
-                # Exponential backoff
-                backoff_time = min(max_backoff_time, backoff_time * 2)
+                backoff_time = min(max_backoff_time, backoff_time + 1)
 
     def update_feed_continuously(self):
         asyncio.run(self.fetch_data_from_fetcher())

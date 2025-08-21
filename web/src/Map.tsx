@@ -469,12 +469,12 @@ export function Map() {
         return;
       }
 
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+      const delay = Math.min(1000 + 1000 * reconnectAttempts, 5000);
       setTimeout(() => {
         if (!isMounted) {
           return;
         }
-        reconnectAttempts++;
+        ++reconnectAttempts;
         console.log(`Reconnecting... Attempt #${reconnectAttempts}`);
         connectWebSocket();
       }, delay);
