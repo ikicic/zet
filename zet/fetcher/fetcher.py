@@ -283,14 +283,22 @@ class Fetcher:
     def reopen_database(self):
         """Close the current database and open a new one."""
         logger.info(f"Reopening a new database after {MAX_SNAPSHOT_COUNT} rows.")
-        self.db_conn.close()
+        self.close_database()
         self.db_conn, self.db_cursor, self.db_path = self.setup_database(self.dir)
         self.new_snapshots_count = 0
+
+    def close_database(self):
+        if self.db_conn:
+            self.db_conn.close()
+            logger.info(f"Database connection closed: {self.db_path}")
 
     def handle_sigint(self, sig, frame):
         """Handle Ctrl-C."""
         logger.info("Shutting down the fetcher...")
         self.running = False
+
+        # First close the database, because closing ws_server might hang.
+        self.close_database()
 
         if self.ws_server:
             self.ws_server.close()
@@ -323,10 +331,6 @@ class Fetcher:
                 current_delay = min(current_delay * 2, 60)
 
             self.sleep(current_delay)
-
-        if self.db_conn:
-            self.db_conn.close()
-            logger.info(f"Database connection closed: {self.db_path}")
 
     def maybe_fetch_static(self) -> bool:
         """Check if the static data is outdated and fetch it if needed.
