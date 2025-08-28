@@ -31,7 +31,7 @@ export interface Vehicle {
 
 export interface RealTimeState {
   vehicles: Vehicle[];
-  latestStaticKey: string;
+  activeStaticKey: string;
 }
 
 export interface CompressedVehicles {
@@ -45,7 +45,7 @@ export interface CompressedVehicles {
 
 export interface CompressedRealTimeState {
   vehicles: CompressedVehicles;
-  latestStaticKey: string;
+  activeStaticKey: string;
 }
 
 class StaticReferenceSystem {
@@ -101,7 +101,7 @@ export function decompressRealTimeState(
 ): RealTimeState {
   return {
     vehicles: decompressVehicles(data.vehicles),
-    latestStaticKey: data.latestStaticKey,
+    activeStaticKey: data.activeStaticKey,
   };
 }
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 import argparse
 import asyncio
 import csv
@@ -139,7 +139,7 @@ class Vehicle:
     @staticmethod
     def from_parsed_vehicle(
         vehicle: ParsedVehicle,
-        static_data: Union['StaticData', None],
+        static_data: Optional['StaticData'],
     ) -> 'Vehicle':
         """Create a vehicle from a parsed vehicle.
 
@@ -157,7 +157,7 @@ class Vehicle:
 
     def update(self,
                vehicle: ParsedVehicle,
-               static_data: Union['StaticData', None]):
+               static_data: Optional['StaticData']):
         self.lat.append(vehicle.lat)
         self.lon.append(vehicle.lon)
         if len(self.lat) > MAX_TRAJECTORY_LENGTH:
@@ -231,18 +231,18 @@ class Vehicle:
 class RealtimeState:
     vehicles: dict[TripId, Vehicle]
     timestamp: int
-    latest_static_key: str | None
+    active_static_key: str | None
 
     def update(
         self,
         feed: ParsedFeed,
-        latest_static_data: Union['StaticDataSnapshot', None],
+        active_static_snapshot: Optional['StaticDataSnapshot'],
     ):
         for vehicle in self.vehicles.values():
             vehicle.no_update_counter += 1
 
-        static_data = (
-            latest_static_data.static_data if latest_static_data else None)
+        static_data = (active_static_snapshot.static_data
+                       if active_static_snapshot else None)
         for vehicle in feed.vehicles:
             v = self.vehicles.get(vehicle.trip_id)
             if v is None:
@@ -257,8 +257,8 @@ class RealtimeState:
         }
 
         self.timestamp = feed.timestamp
-        self.latest_static_key = (
-            latest_static_data.key if latest_static_data else None)
+        self.active_static_key = (
+            active_static_snapshot.key if active_static_snapshot else None)
 
     def to_json_v0(self):
         # The old v0 protocol contains only the vehicles.
@@ -275,7 +275,7 @@ class RealtimeState:
         return {
             'vehicles': Vehicle.to_compressed_json(vehicles, ref),
             'timestamp': self.timestamp,
-            'latestStaticKey': self.latest_static_key,
+            'activeStaticKey': self.active_static_key,
         }
 
 
@@ -332,6 +332,8 @@ class GtfsShape:
 class StaticData:
     trip_to_shape_id: dict[TripId, ShapeId]
     shapes: dict[ShapeId, GtfsShape]
+    # TODO: Store and check ServiceId
+    calendar_dates: set[datetime.date]
 
     @staticmethod
     def from_gzipped_data(gzipped_data: bytes) -> 'StaticData':
@@ -341,6 +343,8 @@ class StaticData:
         # in the correct order. The order is specified by the 'shape_pt_sequence'
         # column.
         unsorted_shapes: dict[str, list[tuple[float, float, int]]] = {}
+
+        calendar_dates: set[datetime.date] = set()
 
         raw_data = gzip.decompress(gzipped_data)
         with zipfile.ZipFile(io.BytesIO(raw_data)) as zip_file:
@@ -361,6 +365,17 @@ class StaticData:
                     sequence = int(row['shape_pt_sequence'])
                     unsorted_shapes.setdefault(shape_id, []).append(
                         (lat, lon, sequence))
+            with zip_file.open('calendar_dates.txt') as file:
+                csv_lines = file.read().decode('utf-8').splitlines()
+                reader = csv.DictReader(csv_lines)
+                for row in reader:
+                    try:
+                        date_yyyymmdd = str(row['date'])
+                        calendar_dates.add(datetime.datetime.strptime(
+                            date_yyyymmdd, '%Y%m%d').date())
+                    except ValueError as e:
+                        logger.error(f"Error parsing calendar_dates.txt: {e}")
+                        pass
 
         shapes: dict[str, GtfsShape] = {}
         for shape_id, shape_points in unsorted_shapes.items():
@@ -371,7 +386,8 @@ class StaticData:
                 lons=[x[1] for x in shape_points],
             )
 
-        return StaticData(trip_to_shape_id=trip_to_shape_id, shapes=shapes)
+        return StaticData(trip_to_shape_id=trip_to_shape_id, shapes=shapes,
+                          calendar_dates=calendar_dates)
 
     def to_json(self, ref: StaticReferenceSystem) -> dict:
         # No need to export the trip_id to the client.
@@ -399,7 +415,7 @@ class GtfsServer:
     def __init__(self, fetcher_url: str):
         self.update_lock = threading.Lock()
         self.realtime_state = RealtimeState(
-            vehicles={}, timestamp=0, latest_static_key=None)
+            vehicles={}, timestamp=0, active_static_key=None)
         self.fetcher_url = fetcher_url
 
         # Note: in principle, we could use websocket_server, but it is not
@@ -424,12 +440,14 @@ class GtfsServer:
         if feed is None:
             return None, None
 
+        today = datetime.date.today()
         with self.update_lock:
-            if self.recent_static_snapshots:
-                latest_static_data = self.recent_static_snapshots[-1]
-            else:
-                latest_static_data = None
-            self.realtime_state.update(feed, latest_static_data)
+            active_static_snapshot = None
+            for snapshot in self.recent_static_snapshots[::-1]:
+                if today in snapshot.static_data.calendar_dates:
+                    active_static_snapshot = snapshot
+                    break
+            self.realtime_state.update(feed, active_static_snapshot)
             message = WsOutputMessageVariants.from_realtime_state(
                 self.realtime_state)
             self.latest_message = message
@@ -461,6 +479,7 @@ class GtfsServer:
         self._notify_clients(message)
 
     def _process_static_data(self, data: dict):
+        logger.info("Processing static data.")
         try:
             key = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')
             static_data = StaticData.from_gzipped_data(

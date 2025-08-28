@@ -145,7 +145,7 @@ async function updateSelectedShape(
   map: maplibregl.Map,
   selectedShapeId: string | null,
   loadedStaticData: LoadedStaticData | null,
-  latestStaticKey: string,
+  activeStaticKey: string,
   setLoadedStaticData: (data: LoadedStaticData) => void
 ) {
   const source = map.getSource("selected-shape") as maplibregl.GeoJSONSource;
@@ -158,9 +158,9 @@ async function updateSelectedShape(
     return null;
   }
   let staticData: StaticData;
-  if (loadedStaticData == null || loadedStaticData.key !== latestStaticKey) {
-    staticData = await fetchStaticData(latestStaticKey);
-    setLoadedStaticData({ key: latestStaticKey, data: staticData });
+  if (loadedStaticData == null || loadedStaticData.key !== activeStaticKey) {
+    staticData = await fetchStaticData(activeStaticKey);
+    setLoadedStaticData({ key: activeStaticKey, data: staticData });
   } else {
     staticData = loadedStaticData.data;
   }
@@ -234,7 +234,7 @@ export function Map() {
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const markerManager = useRef<MarkerManager>(new MarkerManager());
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
-  const [latestStaticKey, setLatestStaticKey] = useState<string | null>(null);
+  const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
   const [loadedStaticData, setLoadedStaticData] =
     useState<LoadedStaticData | null>(null);
   const realTimeData = useRef<RealTimeState | null>(null);
@@ -399,17 +399,17 @@ export function Map() {
   }, []);
 
   useEffect(() => {
-    if (!mapLoaded || mapRef.current == null || latestStaticKey == null) {
+    if (!mapLoaded || mapRef.current == null || activeStaticKey == null) {
       return;
     }
     updateSelectedShape(
       mapRef.current,
       selectedShapeId,
       loadedStaticData,
-      latestStaticKey,
+      activeStaticKey,
       setLoadedStaticData
     );
-  }, [selectedShapeId, latestStaticKey, loadedStaticData]);
+  }, [selectedShapeId, activeStaticKey, loadedStaticData]);
 
   // WebSocket connection and updates with reconnection logic
   useEffect(() => {
@@ -447,7 +447,7 @@ export function Map() {
           );
           updateTrajectories(mapRef.current, state.vehicles);
         }
-        setLatestStaticKey(state.latestStaticKey);
+        setActiveStaticKey(state.activeStaticKey);
       });
 
       ws.addEventListener("close", () => {
