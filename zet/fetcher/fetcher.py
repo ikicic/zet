@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from dataclasses import dataclass
+from urllib.parse import urljoin
 from urllib.request import urlopen
 import argparse
 import csv
@@ -10,6 +11,7 @@ import io
 import json
 import logging
 import os
+import re
 import signal
 import sqlite3
 import time
@@ -124,11 +126,15 @@ class WebSocketSnapshotServer(WebSocketServer):
         super().update_data("static-snapshot", data, max_history=3)
 
 
-def fetch_url(url: str) -> bytes | None:
+def fetch_url(url: str) -> bytes:
+    with urlopen(url, timeout=30) as response:
+        return response.read()
+
+
+def try_fetch_url(url: str) -> bytes | None:
     """Fetch the URL and return the binary content."""
     try:
-        with urlopen(url, timeout=30) as response:
-            return response.read()
+        return fetch_url(url)
     except Exception as e:
         logger.error(f"Error fetching URL: {e}")
         return None
@@ -143,6 +149,7 @@ class Fetcher:
         static_dt: float,
         db_dir: str,
         ws_port: int = 8765,
+        old_static_data: list[bytes] = [],
     ):
         self.realtime_url: str = realtime_url
         self.static_url: str = static_url
@@ -167,6 +174,9 @@ class Fetcher:
         # First send the static data, then the realtime data.
         self.ws_server = WebSocketSnapshotServer(
             ws_port, kinds_order=["static-snapshot", "realtime-snapshot"])
+
+        for static_data in old_static_data:
+            self.store_static_snapshot(static_data)
 
     @staticmethod
     def setup_database(db_dir: str):
@@ -313,7 +323,7 @@ class Fetcher:
         current_delay = short_delay
 
         while self.running:
-            data = fetch_url(self.realtime_url)
+            data = try_fetch_url(self.realtime_url)
             if data is not None:
                 new_snapshot = self.store_realtime_snapshot(data)
                 if new_snapshot:
@@ -345,7 +355,7 @@ class Fetcher:
             return False
 
         self._last_static_fetch = now
-        data = fetch_url(self.static_url)
+        data = try_fetch_url(self.static_url)
         if data is not None:
             self.store_static_snapshot(data)
         return True
@@ -361,10 +371,36 @@ class Fetcher:
             time.sleep(delay % 1)
 
 
+def fetch_old_static_data(list_url: str, regex: str, count: int):
+    """Since the latest static data may represent future dates, we must also
+    download the previous ones to capture the static data for the current
+    date."""
+    if not list_url or not regex or not count:
+        return []
+
+    regex_re = re.compile(regex.encode('ascii'))
+    logger.info(f"Fetching the list of static data from {list_url}")
+    data = fetch_url(list_url)
+    matches = regex_re.findall(data)
+    if not matches:
+        raise ValueError(f"No matches found for: {regex}")
+
+    urls = sorted([match.decode('ascii') for match in matches])
+    snapshots = []
+    for url in urls[-count:]:
+        url = urljoin(list_url, url)
+        logger.info(f"Fetching {url}")
+        snapshots.append(fetch_url(url))
+    return snapshots
+
+
 @dataclass
 class CmdlineArgs:
     realtime_url: str
-    static_url: str
+    latest_static_url: str
+    old_static_list_url: str
+    old_static_url_regex: str
+    old_static_count: int
     realtime_dt: float
     static_dt: float
     dir: str
@@ -378,10 +414,18 @@ def create_parser():
     add = parser.add_argument
     add("--realtime-url", type=str, default="https://www.zet.hr/gtfs-rt-protobuf",
         help="URL to fetch")
-    add('--static-url', type=str,
+    add('--latest-static-url', type=str,
         default="https://www.zet.hr/gtfs-scheduled/latest",
-        help="URL to fetch static GTFS data")
-    add("--realtime-dt", type=float, default=10,
+        help="URL to fetch latest static GTFS data")
+    add('--old-static-list-url', type=str,
+        default="https://www.zet.hr/gtfs2",
+        help="URL to that contains the list of static GTFS data URLs")
+    add('--old-static-url-regex', type=str,
+        default=r'href="(/gtfs-scheduled/scheduled-000-[0-9]+\.zip)"',
+        help="Regex to extract the static GTFS data URL from the static-list-url")
+    add('--old-static-count', type=int, default=2,
+        help="Number of static URLs to download")
+    add('--realtime-dt', type=float, default=10,
         help="Time interval between realtime GTFS data fetches in seconds")
     add('--static-dt', type=float, default=3600,
         help="Time interval between static GTFS data fetches in seconds")
@@ -397,13 +441,25 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
     args = CmdlineArgs(
-        realtime_url=args.realtime_url, static_url=args.static_url,
-        realtime_dt=args.realtime_dt, static_dt=args.static_dt,
-        dir=args.dir, ws_port=args.ws_port)
+        realtime_url=args.realtime_url,
+        latest_static_url=args.latest_static_url,
+        old_static_list_url=args.old_static_list_url,
+        old_static_url_regex=args.old_static_url_regex,
+        old_static_count=args.old_static_count,
+        realtime_dt=args.realtime_dt,
+        static_dt=args.static_dt,
+        dir=args.dir,
+        ws_port=args.ws_port)
 
-    fetcher = Fetcher(args.realtime_url, args.static_url,
+    old_static_data = fetch_old_static_data(
+            args.old_static_list_url,
+            args.old_static_url_regex,
+            args.old_static_count)
+
+    fetcher = Fetcher(args.realtime_url, args.latest_static_url,
                       args.realtime_dt, args.static_dt,
-                      args.dir, args.ws_port)
+                      args.dir, args.ws_port,
+                      old_static_data=old_static_data)
     fetcher.run()
 
 
