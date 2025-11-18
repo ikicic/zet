@@ -276,7 +276,7 @@ function findSelectedMarkerFeature(
 export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const [mapLoaded, setMapLoaded] = useState<boolean>(false);
+  const mapLoadedRef = useRef<boolean>(false);
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [showFilter, setShowFilter] = useState<boolean>(false);
 
@@ -304,7 +304,8 @@ export function Map() {
     if (
       mapRef.current == null ||
       realTimeData.current == null ||
-      filterControlRef.current == null
+      filterControlRef.current == null ||
+      !mapLoadedRef.current
     ) {
       return;
     }
@@ -486,7 +487,12 @@ export function Map() {
         map.getCanvas().style.cursor = "";
       });
 
-      setMapLoaded(true);
+      mapLoadedRef.current = true;
+
+      // If we already have vehicle data from WebSocket, display it now
+      if (realTimeData.current) {
+        redraw();
+      }
     });
 
     // Cleanup
@@ -496,7 +502,11 @@ export function Map() {
   }, []);
 
   useEffect(() => {
-    if (!mapLoaded || mapRef.current == null || activeStaticKey == null) {
+    if (
+      !mapLoadedRef.current ||
+      mapRef.current == null ||
+      activeStaticKey == null
+    ) {
       return;
     }
     updateSelectedShape(
@@ -522,11 +532,9 @@ export function Map() {
     }
   }, [activeStaticKey, loadedSmallStaticData]);
 
-  // WebSocket connection and updates with reconnection logic
+  // WebSocket connection and updates with reconnection logic.
+  // Start immediately, don't wait for map to load.
   useEffect(() => {
-    if (!mapLoaded) {
-      return; // Do not open the websocket yet.
-    }
     let ws: WebSocket | null = null;
     let reconnectAttempts = 0;
     let isMounted = true; // Flag to track if component is still mounted
@@ -549,9 +557,8 @@ export function Map() {
         const data: CompressedRealTimeState = JSON.parse(event.data);
         const state: RealTimeState = decompressRealTimeState(data);
         realTimeData.current = state;
-        if (mapRef.current) {
-          redraw();
-        }
+        // Try to display data - redraw() will check if map is ready
+        redraw();
         setActiveStaticKey(state.activeStaticKey);
       });
 
@@ -591,7 +598,7 @@ export function Map() {
       isMounted = false; // Do not reconnect anymore.
       ws?.close();
     };
-  }, [mapLoaded]);
+  }, []);
 
   const onFilterSelectionChange = (newSelection: Set<RouteId>) => {
     const newFilterState = {
