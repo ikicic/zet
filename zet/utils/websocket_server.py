@@ -17,20 +17,19 @@ class WebSocketServer:
         self.clients: set[websockets.ServerConnection] = set()
         self.clients_lock = threading.Lock()
 
-        # Start WebSocket server in a separate thread
-        self.ws_thread = threading.Thread(target=self.start_ws_server, daemon=True)
-        self.ws_thread.start()
-
         self.data_lock = threading.Lock()
         self.data: OrderedDict[str, list[Data]] = OrderedDict(
             {kind: [] for kind in kinds_order})
         self.loop = None  # Store the event loop reference
 
+        # Start WebSocket server in a separate thread
+        self.ws_thread = threading.Thread(target=self.start_ws_server, daemon=True)
+        self.ws_thread.start()
+
     def start_ws_server(self):
         """Start the WebSocket server in the current thread."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        self.loop = loop
 
         async def start_server_coroutine():
             # Serve only to localhost.
@@ -39,6 +38,7 @@ class WebSocketServer:
             logger.info(f"WebSocket server started on port {self.ws_port}")
 
         loop.run_until_complete(start_server_coroutine())
+        self.loop = loop
         loop.run_forever()
 
     def close(self):
@@ -121,6 +121,8 @@ class WebSocketServer:
         if self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self._notify_all_clients_async(data), self.loop)
+        else:
+            logger.warning(f"Event loop not running, dropping notification for key: {key}")
 
     async def _notify_all_clients_async(self, data: Data):
         """Async method to notify all clients."""
