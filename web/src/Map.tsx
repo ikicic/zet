@@ -13,6 +13,7 @@ import {
   decompressSmallStaticData,
   CompressedSmallStaticData,
   RouteId,
+  Shape,
 } from "./Data";
 import {
   FilterControl,
@@ -21,8 +22,9 @@ import {
   FilterState,
 } from "./Filter";
 import { InfoControl, InfoOverlay } from "./Info";
-import { MarkerManager, MarkerProperties } from "./Markers";
+import { MarkerManager } from "./Markers";
 import "./Map.css";
+import { VehicleLayer } from "./VehicleLayer";
 
 interface LoadedBigStaticData {
   key: string;
@@ -47,127 +49,13 @@ class HighlightedVehicleCriterion {
     this.routeId = routeId;
   }
 
+  getSelectedRouteId(): RouteId | null {
+    return this.routeId;
+  }
+
   isHighlighted(vehicle: Vehicle): boolean {
     return this.routeId != null && vehicle.routeId === this.routeId;
   }
-}
-
-function updateMarkers(
-  map: maplibregl.Map,
-  vehicles: Vehicle[],
-  markerManager: MarkerManager,
-  highlightedVehicleCriterion: HighlightedVehicleCriterion,
-  filterSelection: Set<RouteId>
-): boolean {
-  const source = map.getSource("vehicle-markers") as maplibregl.GeoJSONSource;
-  const highlightedSource = map.getSource(
-    "highlighted-vehicle-markers"
-  ) as maplibregl.GeoJSONSource;
-  const features: GeoJSON.Feature[] = [];
-  const highlightedFeatures: GeoJSON.Feature[] = [];
-
-  vehicles.forEach((vehicle) => {
-    const coord: [number, number] = [
-      vehicle.lon[vehicle.lon.length - 1],
-      vehicle.lat[vehicle.lat.length - 1],
-    ];
-
-    // Round the angle, for memory AND performance reasons.
-    let deg;
-    if (vehicle.directionDegrees != null) {
-      deg = Math.round(vehicle.directionDegrees / 12) * 12;
-    } else {
-      deg = null;
-    }
-    const highlighted = highlightedVehicleCriterion.isHighlighted(vehicle);
-    const hidden =
-      filterSelection.size > 0 && !filterSelection.has(vehicle.routeId);
-    if (hidden && !highlighted) {
-      return;
-    }
-    const markerProperties: MarkerProperties = {
-      label: vehicle.routeId.toString(),
-      directionDegrees: deg,
-      highlighted: false,
-    };
-
-    const marker = markerManager.getOrCreate(map, markerProperties);
-    const feature: GeoJSON.Feature = {
-      type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: coord,
-      },
-      properties: {
-        markerKey: marker.key,
-        shapeId: vehicle.shapeId,
-        routeId: vehicle.routeId,
-        zOrder: -vehicle.routeId,
-      },
-    };
-    // Display the feature in both sources to avoid flickering.
-    features.push(feature);
-    if (highlighted) {
-      const highlightedMarkerProperties: MarkerProperties = {
-        ...markerProperties,
-        highlighted: true,
-      };
-      const highlightedMarker = markerManager.getOrCreate(
-        map,
-        highlightedMarkerProperties
-      );
-      const highlightedFeature: GeoJSON.Feature = {
-        ...feature,
-        properties: {
-          ...feature.properties,
-          markerKey: highlightedMarker.key,
-        },
-      };
-      highlightedFeatures.push(highlightedFeature);
-    }
-  });
-
-  source.setData({
-    type: "FeatureCollection",
-    features: features,
-  });
-  highlightedSource.setData({
-    type: "FeatureCollection",
-    features: highlightedFeatures,
-  });
-
-  const anyMarkerVisible =
-    features.length > 0 || highlightedFeatures.length > 0;
-  return anyMarkerVisible;
-}
-
-function updateTrajectories(
-  map: maplibregl.Map,
-  vehicles: Vehicle[],
-  filterSelection: Set<RouteId>
-) {
-  const features: GeoJSON.Feature[] = [];
-  for (const vehicle of vehicles) {
-    if (filterSelection.size > 0 && !filterSelection.has(vehicle.routeId)) {
-      continue;
-    }
-    features.push({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: vehicle.lon.map((lon, index) => [lon, vehicle.lat[index]]),
-      },
-      properties: {
-        routeId: vehicle.routeId,
-      },
-    });
-  }
-
-  const source = map.getSource("trajectories") as maplibregl.GeoJSONSource;
-  source.setData({
-    type: "FeatureCollection",
-    features: features,
-  });
 }
 
 async function fetchBigStaticData(key: string) {
@@ -184,20 +72,13 @@ async function fetchSmallStaticData(key: string) {
   return decompressSmallStaticData(compressedData);
 }
 
-async function updateSelectedShape(
-  map: maplibregl.Map,
+async function getSelectedShape(
   selectedShapeId: string | null,
   loadedBigStaticData: LoadedBigStaticData | null,
-  activeStaticKey: string,
+  activeStaticKey: string | null,
   setLoadedBigStaticData: (data: LoadedBigStaticData) => void
-) {
-  const source = map.getSource("selected-shape") as maplibregl.GeoJSONSource;
-
-  if (selectedShapeId == null) {
-    source.setData({
-      type: "FeatureCollection",
-      features: [],
-    });
+): Promise<Shape | null> {
+  if (selectedShapeId == null || activeStaticKey == null) {
     return null;
   }
   let bigStaticData: BigStaticData;
@@ -210,67 +91,7 @@ async function updateSelectedShape(
   } else {
     bigStaticData = loadedBigStaticData.data;
   }
-  const shape = bigStaticData.shapes[selectedShapeId];
-  let features: GeoJSON.Feature[] = [];
-  if (shape != null) {
-    // Draw a polyline from the first shape point to the last shape point.
-    features = [
-      {
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: shape.lons.map((lon, index) => [lon, shape.lats[index]]),
-        },
-        properties: {},
-      },
-    ];
-  }
-  source.setData({ type: "FeatureCollection", features: features });
-}
-
-function isWithinMarker(
-  map: maplibregl.Map,
-  markerManager: MarkerManager,
-  feature: GeoJSON.Feature,
-  clickPoint: { x: number; y: number }
-): boolean {
-  const coordinates = (feature.geometry as GeoJSON.Point).coordinates;
-  const markerPixel = map.project({
-    lng: coordinates[0],
-    lat: coordinates[1],
-  });
-  const dx = clickPoint.x - markerPixel.x;
-  const dy = clickPoint.y - markerPixel.y;
-  const markerKey = feature.properties?.markerKey;
-  if (markerKey == null) {
-    return false;
-  }
-  const markerShape = markerManager.getMarkerShape(markerKey);
-  if (markerShape == null) {
-    return false;
-  }
-  return markerShape.isWithinShape(dx, dy);
-}
-
-function findSelectedMarkerFeature(
-  map: maplibregl.Map,
-  markerManager: MarkerManager,
-  features: GeoJSON.Feature[],
-  clickPoint: { x: number; y: number }
-): GeoJSON.Feature | null {
-  // Select the feature with the highest zOrder.
-  let topFeature: GeoJSON.Feature | null = null;
-  let topZOrder: number | null = null;
-  for (const feature of features) {
-    if (topZOrder != null && feature.properties?.zOrder < topZOrder) {
-      continue;
-    }
-    if (isWithinMarker(map, markerManager, feature, clickPoint)) {
-      topFeature = feature;
-      topZOrder = feature.properties?.zOrder;
-    }
-  }
-  return topFeature;
+  return bigStaticData.shapes[selectedShapeId] || null;
 }
 
 export function Map() {
@@ -288,12 +109,15 @@ export function Map() {
   const anyMarkerVisibleRef = useRef<boolean>(true);
 
   const markerManager = useRef<MarkerManager>(new MarkerManager());
+  const vehicleLayerRef = useRef<VehicleLayer | null>(null);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
   const [loadedBigStaticData, setLoadedBigStaticData] =
     useState<LoadedBigStaticData | null>(null);
   const [loadedSmallStaticData, setLoadedSmallStaticData] =
     useState<LoadedSmallStaticData | null>(null);
+  const [selectedShape, setSelectedShape] = useState<Shape | null>(null);
+  const selectedShapeRef = useRef<Shape | null>(null);
   const realTimeData = useRef<RealTimeState | null>(null);
   const highlightedVehicleCriterion = useRef<HighlightedVehicleCriterion>(
     new HighlightedVehicleCriterion()
@@ -313,29 +137,58 @@ export function Map() {
       ? filterStateRef.current.selection
       : new Set<RouteId>();
 
-    anyMarkerVisibleRef.current = updateMarkers(
-      mapRef.current,
-      realTimeData.current.vehicles,
-      markerManager.current,
-      highlightedVehicleCriterion.current,
-      activeSelection
-    );
-    console.log(
-      "filterStateRef.current",
-      filterStateRef.current,
-      anyMarkerVisibleRef.current
-    );
+    const highlightedRouteId =
+      highlightedVehicleCriterion.current.getSelectedRouteId();
+
+    if (vehicleLayerRef.current) {
+      vehicleLayerRef.current.setData(
+        realTimeData.current.vehicles,
+        activeSelection,
+        highlightedRouteId,
+        selectedShapeRef.current
+      );
+    }
+
+    // Determine if any markers are visible for the filter control
+    const anyVisible = realTimeData.current.vehicles.some((v) => {
+      const highlighted = highlightedVehicleCriterion.current.isHighlighted(v);
+      const hidden =
+        activeSelection.size > 0 && !activeSelection.has(v.routeId);
+      return !hidden || highlighted;
+    });
+    anyMarkerVisibleRef.current = anyVisible;
+
     if (filterControlRef.current != null) {
       filterControlRef.current.updateState(
         filterStateRef.current,
         anyMarkerVisibleRef.current
       );
     }
-    updateTrajectories(
-      mapRef.current,
-      realTimeData.current.vehicles,
-      activeSelection
-    );
+
+    const collisionSource = mapRef.current.getSource(
+      "collision-proxy"
+    ) as maplibregl.GeoJSONSource;
+    if (collisionSource) {
+      collisionSource.setData({
+        type: "FeatureCollection",
+        features: realTimeData.current.vehicles
+          .filter((v) => {
+            const highlighted =
+              highlightedVehicleCriterion.current.isHighlighted(v);
+            const hidden =
+              activeSelection.size > 0 && !activeSelection.has(v.routeId);
+            return !hidden || highlighted;
+          })
+          .map((v) => ({
+            type: "Feature",
+            geometry: {
+              type: "Point",
+              coordinates: [v.lon[v.lon.length - 1], v.lat[v.lat.length - 1]],
+            },
+            properties: {},
+          })),
+      });
+    }
   };
 
   // Initialize map
@@ -400,91 +253,52 @@ export function Map() {
         },
       };
 
-      map.addSource("vehicle-markers", emptyGeoJSON);
-      map.addSource("highlighted-vehicle-markers", emptyGeoJSON);
-      map.addSource("trajectories", emptyGeoJSON);
-      map.addSource("selected-shape", emptyGeoJSON);
+      // Create an empty icon for collision detection.
+      const SIZE = 13 * window.devicePixelRatio;
+      const canvas = document.createElement("canvas");
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "red";
+      ctx.fillRect(0, 0, SIZE, SIZE);
+      map.addImage("ghost-marker", ctx.getImageData(0, 0, SIZE, SIZE));
 
+      // Add a ghost layer, containing one symbol for each vehicle, such that
+      // maplibre hides area names benith vehicles. This way we declutter the
+      // map a bit.
+      map.addSource("collision-proxy", emptyGeoJSON);
       map.addLayer({
-        id: "trajectory-lines",
-        type: "line",
-        source: "trajectories",
-        paint: {
-          "line-color": "#ff6464",
-          "line-opacity": 0.7,
-          "line-width": 2,
-        },
-      });
-
-      // Render markers as symbols with various dynamically created images.
-      map.addLayer({
-        id: "vehicle-markers",
+        id: "collision-proxy",
         type: "symbol",
-        source: "vehicle-markers",
+        source: "collision-proxy",
         layout: {
-          "icon-image": ["get", "markerKey"],
+          "icon-image": "ghost-marker",
           "icon-size": 1,
+          // "Show" all vehicles even if they overlap, to hopefully speed up
+          // the collision step.
           "icon-allow-overlap": true,
-          "symbol-sort-key": ["get", "zOrder"],
+          "icon-ignore-placement": false, // Hide map labels benith this layer.
         },
-      });
-      // Hopefully this disabled symbol fade in/out.
-      map.setPaintProperty("vehicle-markers", "icon-opacity", 1.0);
-
-      map.addLayer({
-        id: "selected-shape",
-        type: "line",
-        source: "selected-shape",
         paint: {
-          "line-color": "#000",
-          "line-width": 3,
+          "icon-opacity": 0, // Do not render, just use for collision detection.
         },
       });
 
-      // Highlighted vehicles on top of the other vehicles.
-      map.addLayer({
-        id: "highlighted-vehicle-markers",
-        type: "symbol",
-        source: "highlighted-vehicle-markers",
-        layout: {
-          "icon-image": ["get", "markerKey"],
-          "icon-size": 1,
-          "icon-allow-overlap": true,
-          "symbol-sort-key": ["get", "zOrder"],
-        },
-      });
-
-      map.on("click", (e) => {
-        const features = map.queryRenderedFeatures(e.point, {
-          layers: ["highlighted-vehicle-markers", "vehicle-markers"],
-        });
-        const feature = findSelectedMarkerFeature(
-          map,
-          markerManager.current,
-          features,
-          e.point
-        );
-        if (feature != null) {
-          setSelectedShapeId(feature.properties?.shapeId);
+      vehicleLayerRef.current = new VehicleLayer(map, markerManager.current, {
+        onVehicleClick: (vehicle) => {
+          setSelectedShapeId(vehicle.shapeId);
           highlightedVehicleCriterion.current.setSelectedRouteId(
-            feature.properties?.routeId
+            vehicle.routeId
           );
-        } else {
+          // The useEffect will handle fetching the shape and calling redraw
+        },
+        onNothingClick: () => {
           setSelectedShapeId(null);
           highlightedVehicleCriterion.current.setSelectedRouteId(null);
-        }
-        if (realTimeData.current != null) {
+          selectedShapeRef.current = null;
+          setSelectedShape(null);
           redraw();
-        }
-      });
-
-      // TODO: Precisely check whether the mouse cursor is over a marker.
-      map.on("mouseenter", "vehicle-markers", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-
-      map.on("mouseleave", "vehicle-markers", () => {
-        map.getCanvas().style.cursor = "";
+        },
       });
 
       mapLoadedRef.current = true;
@@ -497,26 +311,28 @@ export function Map() {
 
     // Cleanup
     return () => {
+      if (vehicleLayerRef.current) {
+        vehicleLayerRef.current.destroy();
+      }
       map.remove();
     };
   }, []);
 
   useEffect(() => {
-    if (
-      !mapLoadedRef.current ||
-      mapRef.current == null ||
-      activeStaticKey == null
-    ) {
-      return;
-    }
-    updateSelectedShape(
-      mapRef.current,
+    getSelectedShape(
       selectedShapeId,
       loadedBigStaticData,
       activeStaticKey,
       setLoadedBigStaticData
-    );
+    ).then((shape) => {
+      selectedShapeRef.current = shape;
+      setSelectedShape(shape);
+    });
   }, [selectedShapeId, activeStaticKey, loadedBigStaticData]);
+
+  useEffect(() => {
+    redraw();
+  }, [selectedShape]);
 
   useEffect(() => {
     if (activeStaticKey == null) {

@@ -26,6 +26,7 @@ export class MarkerShape {
 export interface Marker {
   key: MarkerKey;
   shape: MarkerShape;
+  canvas: HTMLCanvasElement;
 }
 
 export interface MarkerProperties {
@@ -117,8 +118,8 @@ function renderMarker(
       ? HIGHLIGHTED_TRAM_COLOR
       : HIGHLIGHTED_BUS_COLOR
     : isTram
-    ? TRAM_COLOR
-    : BUS_COLOR;
+      ? TRAM_COLOR
+      : BUS_COLOR;
 
   ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
   ctx.shadowBlur = SHADOW_BLUR;
@@ -178,23 +179,19 @@ function renderMarker(
 export class MarkerManager {
   private markers: Map<MarkerKey, Marker> = new Map();
 
-  getOrCreate(map: maplibregl.Map, markerProperties: MarkerProperties): Marker {
+  getOrCreate(markerProperties: MarkerProperties): Marker {
     const key = markerToImageKey(markerProperties);
     const fromCache = this.markers.get(key);
     if (fromCache) {
       return fromCache;
     }
-    const [canvas, ctx, markerShape] = renderMarker(markerProperties);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const pixelRatio = window.devicePixelRatio;
-    map.addImage(key, imageData, { pixelRatio });
-    const marker = { key: key, shape: markerShape };
+    const [canvas, , markerShape] = renderMarker(markerProperties);
+    const marker = { key: key, shape: markerShape, canvas: canvas };
     this.markers.set(key, marker);
     return marker;
   }
 
-  getMarkerShape(markerKey: MarkerKey): MarkerShape | null {
-    const marker = this.markers.get(markerKey);
-    return marker ? marker.shape : null;
+  getMarker(markerKey: MarkerKey): Marker | null {
+    return this.markers.get(markerKey) || null;
   }
 }
