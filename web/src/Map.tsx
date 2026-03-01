@@ -292,7 +292,7 @@ export function Map() {
           highlightedVehicleCriterion.current.setSelectedRouteId(
             vehicle.routeId
           );
-          if (vehicle.shapeId == null) {
+          if (!vehicle.shapeId) {
             redraw();
           }
           // Otherwise, the useEffect will handle fetching the shape and calling redraw
