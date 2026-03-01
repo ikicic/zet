@@ -290,7 +290,10 @@ export function Map() {
           highlightedVehicleCriterion.current.setSelectedRouteId(
             vehicle.routeId
           );
-          // The useEffect will handle fetching the shape and calling redraw
+          if (vehicle.shapeId == null) {
+            redraw();
+          }
+          // Otherwise, the useEffect will handle fetching the shape and calling redraw
         },
         onNothingClick: () => {
           setSelectedShapeId(null);
