@@ -1,0 +1,55 @@
+.stale-indicator {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+}
+
+.stale-dot {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  cursor: pointer;
+  animation: stale-pulse 1.5s ease-in-out infinite;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+@media (pointer: coarse) {
+  .stale-dot::before {
+    content: "";
+    position: absolute;
+    top: -10px;
+    left: -10px;
+    right: -10px;
+    bottom: -10px;
+  }
+}
+
+.stale-dot-orange {
+  background: #f59e0b;
+}
+
+.stale-dot-red {
+  background: #ef4444;
+}
+
+@keyframes stale-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.stale-message {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}

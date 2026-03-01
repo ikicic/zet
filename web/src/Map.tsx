@@ -25,6 +25,7 @@ import { InfoControl, InfoOverlay } from "./Info";
 import { MarkerManager } from "./Markers";
 import "./Map.css";
 import { VehicleLayer } from "./VehicleLayer";
+import { StaleDataIndicator } from "./StaleDataIndicator";
 
 interface LoadedBigStaticData {
   key: string;
@@ -123,6 +124,7 @@ export function Map() {
     new HighlightedVehicleCriterion()
   );
   const filterControlRef = useRef<FilterControl | null>(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState<number | null>(null);
 
   const redraw = () => {
     if (
@@ -376,6 +378,7 @@ export function Map() {
         const data: CompressedRealTimeState = JSON.parse(event.data);
         const state: RealTimeState = decompressRealTimeState(data);
         realTimeData.current = state;
+        setLastUpdateTime(state.timestamp * 1000);
         // Try to display data - redraw() will check if map is ready
         redraw();
         setActiveStaticKey(state.activeStaticKey);
@@ -440,7 +443,10 @@ export function Map() {
 
   return (
     <>
-      <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
+        <StaleDataIndicator lastUpdateTime={lastUpdateTime} />
+      </div>
       {showInfo && <InfoOverlay onClose={() => setShowInfo(false)} />}
       {showFilter && (
         <FilterOverlay

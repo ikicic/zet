@@ -44,6 +44,7 @@ export interface Vehicle {
 
 export interface RealTimeState {
   vehicles: Vehicle[];
+  timestamp: number;
   activeStaticKey: string;
 }
 
@@ -58,6 +59,7 @@ export interface CompressedVehicles {
 
 export interface CompressedRealTimeState {
   vehicles: CompressedVehicles;
+  timestamp: number;
   activeStaticKey: string;
 }
 
@@ -114,6 +116,7 @@ export function decompressRealTimeState(
 ): RealTimeState {
   return {
     vehicles: decompressVehicles(data.vehicles),
+    timestamp: data.timestamp,
     activeStaticKey: data.activeStaticKey,
   };
 }
