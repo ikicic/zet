@@ -229,11 +229,14 @@ class Fetcher:
                 self.ws_server.update_realtime_snapshot(data)
             gzipped_data = data.gzipped_data
 
-        self.db_cursor.execute(
-            "INSERT INTO snapshots (fetched_at, snapshot_at, gzipped_data) VALUES (?, ?, ?)",
-            (fetched_at.timestamp(), data.snapshot_at, gzipped_data)
-        )
-        self.db_conn.commit()
+        try:
+            self.db_cursor.execute(
+                "INSERT INTO snapshots (fetched_at, snapshot_at, gzipped_data) VALUES (?, ?, ?)",
+                (fetched_at.timestamp(), data.snapshot_at, gzipped_data)
+            )
+            self.db_conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to INSERT realtime snapshot: {e}")
         if not same_snapshot:
             self.new_snapshots_count += 1
             if self.new_snapshots_count >= MAX_SNAPSHOT_COUNT:
@@ -273,11 +276,14 @@ class Fetcher:
                 self.ws_server.update_static_snapshot(data)
             gzipped_data = data.gzipped_data
 
-        self.db_cursor.execute(
-            "INSERT INTO static_snapshots (fetched_at, gzipped_data, calendar_date) VALUES (?, ?, ?)",
-            (fetched_at.timestamp(), gzipped_data, data.calendar_date)
-        )
-        self.db_conn.commit()
+        try:
+            self.db_cursor.execute(
+                "INSERT INTO static_snapshots (fetched_at, gzipped_data, calendar_date) VALUES (?, ?, ?)",
+                (fetched_at.timestamp(), gzipped_data, data.calendar_date)
+            )
+            self.db_conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to INSERT static snapshot: {e}")
 
         fetched_at_str = fetched_at.isoformat(sep=' ', timespec='milliseconds')
         calendar_date_str = data.calendar_date.isoformat()
