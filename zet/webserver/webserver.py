@@ -23,8 +23,10 @@ import simple_websocket
 import websockets
 
 import zet.math.latlon as latlon
+from zet.utils.pushover import RateLimitedNotifier
 
 MAX_TRAJECTORY_LENGTH = 30
+STALE_THRESHOLD = 120  # seconds
 TRAJECTORY_OUTPUT_LENGTH = 6
 DIRECTION_THRESHOLD_METERS = 20
 
@@ -465,6 +467,8 @@ class GtfsServer:
 
         self._send_time = 0
         self.recent_static_snapshots: list[StaticDataSnapshot] = []
+        self.last_realtime_update: float = 0
+        self.notifier = RateLimitedNotifier(cooldown=3600)
 
     def process_feed(
         self,
@@ -504,6 +508,7 @@ class GtfsServer:
         feed, message = self.process_feed(raw_feed)
         if feed is None or message is None:
             return
+        self.last_realtime_update = time.time()
         date = datetime.datetime.now()
         with self.ws_clients_lock:
             num_clients = len(self.ws_clients)
@@ -538,6 +543,20 @@ class GtfsServer:
         except Exception as e:
             logger.error(f"Error processing static data: {e}")
 
+    def _check_staleness(self):
+        if self.last_realtime_update == 0:
+            return
+        elapsed = time.time() - self.last_realtime_update
+        if elapsed > STALE_THRESHOLD:
+            self.notifier.try_send(
+                "Stale GTFS Data",
+                f"No realtime update for {int(elapsed)}s")
+
+    def _staleness_check_loop(self):
+        while True:
+            time.sleep(30)
+            self._check_staleness()
+
     async def fetch_data_from_fetcher(self):
         def process_message(fetcher_message):
             data = json.loads(fetcher_message)
@@ -553,7 +572,6 @@ class GtfsServer:
             except Exception as e:
                 logger.error(f"Error processing {kind} message: {e}")
 
-
         backoff_time = 1
         max_backoff_time = 4
         while True:
@@ -566,6 +584,7 @@ class GtfsServer:
                         message = await websocket.recv()
                         process_message(message)
             except Exception as e:
+                self._check_staleness()
                 logger.error(f"Connection error: {e}. "
                              f"Reconnecting in {backoff_time} seconds...")
                 await asyncio.sleep(backoff_time)
@@ -689,6 +708,9 @@ def main():
         update_thread = threading.Thread(
             target=gtfs_server.update_feed_continuously, daemon=True)
         update_thread.start()
+        staleness_thread = threading.Thread(
+            target=gtfs_server._staleness_check_loop, daemon=True)
+        staleness_thread.start()
     else:
         gtfs_server.update_feed_from_file(args.file)
 

@@ -20,6 +20,7 @@ import zipfile
 from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 
+from zet.utils.pushover import RateLimitedNotifier
 from zet.utils.websocket_server import WebSocketServer
 
 # TODO: Remove code duplication between realtime and static snapshot
@@ -162,6 +163,7 @@ class Fetcher:
 
         self.current_realtime_snapshot: RealtimeSnapshotData | None = None
         self.current_static_snapshot: StaticSnapshotData | None = None
+        self.notifier = RateLimitedNotifier()
 
         self._last_static_fetch: datetime.datetime | None = None
 
@@ -237,6 +239,9 @@ class Fetcher:
             self.db_conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Failed to INSERT realtime snapshot: {e}")
+            self.notifier.try_send(
+                "Fetcher DB Error",
+                f"Failed to INSERT realtime snapshot: {e}")
         if not same_snapshot:
             self.new_snapshots_count += 1
             if self.new_snapshots_count >= MAX_SNAPSHOT_COUNT:
@@ -284,6 +289,9 @@ class Fetcher:
             self.db_conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Failed to INSERT static snapshot: {e}")
+            self.notifier.try_send(
+                "Fetcher DB Error",
+                f"Failed to INSERT static snapshot: {e}")
 
         fetched_at_str = fetched_at.isoformat(sep=' ', timespec='milliseconds')
         calendar_date_str = data.calendar_date.isoformat()
