@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 
@@ -43,17 +44,32 @@ def send_notification(title: str, message: str) -> bool:
 
 
 class RateLimitedNotifier:
-    """Wraps send_notification with a cooldown period."""
+    """Wraps send_notification with a cooldown period.
 
-    def __init__(self, cooldown: int = 8 * 3600):
+    When aggregate=False (default), messages during cooldown are suppressed.
+    When aggregate=True, messages during cooldown are buffered and sent as a
+    single combined notification when the cooldown expires.
+    """
+
+    def __init__(self, cooldown: int = 8 * 3600, aggregate: bool = True):
         self.cooldown: int = cooldown
+        self.aggregate: bool = aggregate
         self.last_sent_time: float = 0
+        self._lock = threading.Lock()
+        self._pending: list[str] = []
+        self._timer: threading.Timer | None = None
 
     def try_send(self, title: str, message: str) -> bool:
         """Send a notification if enough time has passed since the last one.
 
-        Logs every attempt. Returns True if the notification was actually sent.
+        Logs every attempt. Returns True if the notification was actually sent
+        (or scheduled for aggregation).
         """
+        if not self.aggregate:
+            return self._try_send_simple(title, message)
+        return self._try_send_aggregate(title, message)
+
+    def _try_send_simple(self, title: str, message: str) -> bool:
         now = time.time()
         elapsed = now - self.last_sent_time
         if elapsed < self.cooldown:
@@ -65,3 +81,54 @@ class RateLimitedNotifier:
         if sent:
             self.last_sent_time = now
         return sent
+
+    def _try_send_aggregate(self, title: str, message: str) -> bool:
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_sent_time
+            if elapsed >= self.cooldown:
+                # Cooldown expired: collect pending + this message, send now.
+                messages = self._pending + [message]
+                self._pending = []
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+                self.last_sent_time = now
+            else:
+                # Cooldown active: buffer and schedule flush.
+                self._pending.append(message)
+                if self._timer is None:
+                    remaining = self.cooldown - elapsed + 1
+                    self._timer = threading.Timer(
+                        remaining, self._flush_pending, args=(title,))
+                    self._timer.daemon = True
+                    self._timer.start()
+                return True
+
+        # Send outside the lock to avoid blocking.
+        combined = _combine_messages(title, messages)
+        send_notification(combined[0], combined[1])
+        return True
+
+    def _flush_pending(self, title: str):
+        with self._lock:
+            messages = self._pending
+            self._pending = []
+            self._timer = None
+            self.last_sent_time = time.time()
+
+        if messages:
+            combined = _combine_messages(title, messages)
+            send_notification(combined[0], combined[1])
+
+
+def _combine_messages(
+    title: str, messages: list[str]
+) -> tuple[str, str]:
+    if len(messages) == 1:
+        return title, messages[0]
+    titled = f"{title} ({len(messages)})"
+    body = "\n---\n".join(messages)
+    if len(body) > 1000:
+        body = body[:997] + "..."
+    return titled, body
