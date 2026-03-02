@@ -26,6 +26,7 @@ import { MarkerManager } from "./Markers";
 import "./Map.css";
 import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
+import { getUrl, getHttpUrl } from "./url";
 
 interface LoadedBigStaticData {
   key: string;
@@ -35,12 +36,6 @@ interface LoadedBigStaticData {
 interface LoadedSmallStaticData {
   key: string;
   data: SmallStaticData;
-}
-
-function getUrl(schema: string, secureSchema: string, path: string) {
-  return window.location.protocol === "https:"
-    ? `${secureSchema}://${window.location.host}/${path}`
-    : `${schema}://${window.location.hostname}:5000/${path}`;
 }
 
 class HighlightedVehicleCriterion {
@@ -60,14 +55,14 @@ class HighlightedVehicleCriterion {
 }
 
 async function fetchBigStaticData(key: string) {
-  const url = getUrl("http", "https", `static/${key}`);
+  const url = getHttpUrl(`static/${key}`);
   const response = await fetch(url);
   const compressedData: CompressedBigStaticData = await response.json();
   return decompressBigStaticData(compressedData);
 }
 
 async function fetchSmallStaticData(key: string) {
-  const url = getUrl("http", "https", `static/small/v0/${key}`);
+  const url = getHttpUrl(`static/small/v0/${key}`);
   const response = await fetch(url);
   const compressedData: CompressedSmallStaticData = await response.json();
   return decompressSmallStaticData(compressedData);

@@ -1,4 +1,5 @@
 import { Overlay } from "./Overlay";
+import { FeedbackForm } from "./Feedback";
 
 // SVG content from maplibre-gl/src/css/svg/maplibregl-ctrl-attrib.svg
 const infoIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill-rule="evenodd" viewBox="0 0 20 20" style="fill: #333; margin-top: 2px;">
@@ -53,9 +54,14 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
         </ExternalLink>
       </p>
       <p>
-        Izvorni kod:{" "}
         <ExternalLink href="https://github.com/ikicic/zet">GitHub</ExternalLink>
+        {" | "}
+        <ExternalLink href="/privacy.html">
+          Pravila privatnosti
+        </ExternalLink>
       </p>
+      <hr className="feedback-separator" />
+      <FeedbackForm />
     </Overlay>
   );
 }

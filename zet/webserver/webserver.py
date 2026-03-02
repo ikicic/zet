@@ -14,7 +14,7 @@ import threading
 import time
 import zipfile
 
-from flask import Flask
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sock import Sock
 from google.protobuf.json_format import MessageToDict
@@ -23,6 +23,7 @@ import simple_websocket
 import websockets
 
 import zet.math.latlon as latlon
+from zet.utils.email import send_feedback_email
 from zet.utils.pushover import RateLimitedNotifier
 
 MAX_TRAJECTORY_LENGTH = 30
@@ -469,6 +470,8 @@ class GtfsServer:
         self.recent_static_snapshots: list[StaticDataSnapshot] = []
         self.last_realtime_update: float = 0
         self.notifier = RateLimitedNotifier(cooldown=3600)
+        self._feedback_timestamps: list[float] = []
+        self._feedback_lock = threading.Lock()
 
     def process_feed(
         self,
@@ -594,7 +597,7 @@ class GtfsServer:
         asyncio.run(self.fetch_data_from_fetcher())
 
     def _notify_clients(self, message: WsOutputMessageVariants):
-        dead_clients = set()
+        dead_clients: set[WsClient] = set()
         with self.ws_clients_lock:
             clients = list(self.ws_clients)
         start_time = time.time()
@@ -678,6 +681,52 @@ def static_data_small(key: str):
     json_data, status = gtfs_server.handle_small_static_data_request(key)
     cache_control = 'public, max-age=5184000' if status == 200 else 'no-cache'
     return json_data, status, {'Cache-Control': cache_control}
+
+
+FEEDBACK_RATE_LIMIT = 100  # max submissions per hour
+FEEDBACK_RATE_WINDOW = 3600  # seconds
+
+
+@app.route('/api/feedback', methods=['POST'])
+def feedback():
+    if gtfs_server is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json(silent=True)
+    if (not data
+            or not isinstance(data, dict)
+            or not isinstance(data.get('message'), str)):
+        return jsonify({"error": "Neispravan zahtjev."}), 400
+
+    message = data['message'].strip()
+    if not message:
+        return jsonify({"error": "Poruka ne smije biti prazna."}), 400
+    if len(message) > 1000:
+        return jsonify({"error": "Poruka je predugačka."}), 400
+
+    now = time.time()
+    with gtfs_server._feedback_lock:
+        # Prune old timestamps.
+        cutoff = now - FEEDBACK_RATE_WINDOW
+        gtfs_server._feedback_timestamps = [
+            t for t in gtfs_server._feedback_timestamps if t > cutoff]
+        if len(gtfs_server._feedback_timestamps) >= FEEDBACK_RATE_LIMIT:
+            return jsonify({
+                "error": "Previše je poruka primljeno. Pokušajte kasnije."}), 429
+        gtfs_server._feedback_timestamps.append(now)
+
+    email = data.get('email', '')
+    if not isinstance(email, str):
+        email = ''
+    email = email.strip()[:100]
+
+    email_body = message
+    if email:
+        email_body += f"\n\nE-mail: {email}"
+    random_id = os.urandom(3).hex()
+    if not send_feedback_email(f"[{random_id}] ZET Feedback", email_body):
+        return jsonify({"error": "Greška pri slanju. Pokušajte kasnije."}), 500
+    return jsonify({"status": "ok", "message": "Hvala na poruci!"}), 200
 
 
 def create_parser():

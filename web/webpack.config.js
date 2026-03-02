@@ -28,6 +28,11 @@ module.exports = {
     new HtmlWebpackPlugin({
       template: "./public/index.html",
     }),
+    new HtmlWebpackPlugin({
+      template: "./public/privacy.html",
+      filename: "privacy.html",
+      inject: false,
+    }),
   ],
   devServer: {
     static: {
