@@ -319,7 +319,7 @@ export class VehicleLayer {
 
     const marker = this.markerManager.getOrCreate(markerProperties);
 
-    const sprite = marker.canvas;
+    const sprite = marker.image;
     const sw = sprite.width;
     const sh = sprite.height;
 

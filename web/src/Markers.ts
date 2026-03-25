@@ -26,7 +26,7 @@ export class MarkerShape {
 export interface Marker {
   key: MarkerKey;
   shape: MarkerShape;
-  canvas: HTMLCanvasElement;
+  image: HTMLCanvasElement | ImageBitmap;
 }
 
 export interface MarkerProperties {
@@ -186,8 +186,12 @@ export class MarkerManager {
       return fromCache;
     }
     const [canvas, , markerShape] = renderMarker(markerProperties);
-    const marker = { key: key, shape: markerShape, canvas: canvas };
+    const marker: Marker = { key: key, shape: markerShape, image: canvas };
     this.markers.set(key, marker);
+    // Convert to ImageBitmap for faster drawImage.
+    createImageBitmap(canvas).then((bitmap) => {
+      marker.image = bitmap;
+    });
     return marker;
   }
 
