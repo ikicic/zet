@@ -27,6 +27,10 @@ import "./Map.css";
 import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getUrl, getHttpUrl } from "./url";
+import { PerfOverlay } from "./PerfOverlay";
+
+const PERFORMANCE_MODE =
+  new URLSearchParams(window.location.search).get("perf") === "1";
 
 interface LoadedBigStaticData {
   key: string;
@@ -441,6 +445,7 @@ export function Map() {
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
         <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
         <StaleDataIndicator lastUpdateTime={lastUpdateTime} />
+        {PERFORMANCE_MODE && <PerfOverlay />}
       </div>
       {showInfo && <InfoOverlay onClose={() => setShowInfo(false)} />}
       {showFilter && (

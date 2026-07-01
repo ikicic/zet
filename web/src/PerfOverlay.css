@@ -1,0 +1,25 @@
+.perf-overlay {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 20;
+  width: 130px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  font: 12px/1.35 Arial, sans-serif;
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  user-select: none;
+}
+
+.perf-overlay-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.perf-overlay-label {
+  color: rgba(255, 255, 255, 0.72);
+}
