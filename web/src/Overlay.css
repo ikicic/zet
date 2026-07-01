@@ -25,6 +25,16 @@
   position: relative;
 }
 
+.overlay-content > h3 {
+  margin-top: 0.1em;
+}
+
+@media (max-width: 480px) {
+  .overlay-content {
+    font-size: 95%;
+  }
+}
+
 .overlay-content-bottom {
   bottom: 0;
   position: absolute;

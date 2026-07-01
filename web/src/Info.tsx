@@ -24,7 +24,10 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
     <Overlay onClose={onClose}>
       <h3>ZET uživo</h3>
       <p>
-        <i>Napomena: Prikazivanje trasa vozila je eksperimentalno!</i>
+        <i>
+          Napomena: zet.skoljka.org je neslužbena aplikacija, neovisna o ZET-u.
+          Za informacije o voznom redu, molimo kontaktirajte <a href="https://www.zet.hr/kontakti-276/276">ZET</a>.
+        </i>
       </p>
       <p>
         Sadrži informacije tijela javne vlasti u skladu s{" "}
