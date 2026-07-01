@@ -28,6 +28,7 @@ import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
+import { TrajectoryLayer } from "./TrajectoryLayer";
 
 const PERFORMANCE_MODE =
   new URLSearchParams(window.location.search).get("perf") === "1";
@@ -110,6 +111,7 @@ export function Map() {
 
   const markerManager = useRef<MarkerManager>(new MarkerManager());
   const vehicleLayerRef = useRef<VehicleLayer | null>(null);
+  const trajectoryLayerRef = useRef<TrajectoryLayer | null>(null);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
   const [loadedBigStaticData, setLoadedBigStaticData] =
@@ -149,6 +151,12 @@ export function Map() {
         selectedShapeRef.current
       );
     }
+
+    trajectoryLayerRef.current?.setData(
+      realTimeData.current.vehicles,
+      activeSelection,
+      highlightedRouteId
+    );
 
     // Determine if any markers are visible for the filter control
     const anyVisible = realTimeData.current.vehicles.some((v) => {
@@ -284,6 +292,9 @@ export function Map() {
           "icon-opacity": 0, // Do not render, just use for collision detection.
         },
       });
+
+      trajectoryLayerRef.current = new TrajectoryLayer();
+      map.addLayer(trajectoryLayerRef.current);
 
       vehicleLayerRef.current = new VehicleLayer(map, markerManager.current, {
         onVehicleClick: (vehicle) => {

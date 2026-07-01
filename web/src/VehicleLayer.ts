@@ -191,7 +191,6 @@ export class VehicleLayer {
 
     const unselectedVehicles: Vehicle[] = [];
     const highlightedVehicles: Vehicle[] = [];
-    const visibleVehicles: Vehicle[] = [];
     for (const vehicle of this.vehicles) {
       const highlighted =
         this.highlightedRouteId !== null &&
@@ -202,7 +201,6 @@ export class VehicleLayer {
 
       if (hidden && !highlighted) continue;
 
-      visibleVehicles.push(vehicle);
       if (highlighted) {
         highlightedVehicles.push(vehicle);
       } else {
@@ -213,9 +211,6 @@ export class VehicleLayer {
     // Sort by label (smaller number is on top)
     unselectedVehicles.sort((a, b) => b.routeId - a.routeId);
     highlightedVehicles.sort((a, b) => b.routeId - a.routeId);
-
-    // 0. Draw trajectories
-    this.drawTrajectories(visibleVehicles);
 
     // 1. Draw unselected vehicles
     for (const vehicle of unselectedVehicles) {
@@ -231,34 +226,6 @@ export class VehicleLayer {
     for (const vehicle of highlightedVehicles) {
       this.drawVehicle(vehicle, true);
     }
-  }
-
-  private drawTrajectories(vehicles: Vehicle[]) {
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = this.ctx;
-
-    ctx.save();
-    ctx.strokeStyle = "#ff6464";
-    ctx.globalAlpha = 0.7;
-    ctx.lineWidth = 2 * dpr;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    for (const vehicle of vehicles) {
-      ctx.beginPath();
-      let first = true;
-      for (let i = 0; i < vehicle.lon.length; i++) {
-        const pixel = this.map.project([vehicle.lon[i], vehicle.lat[i]]);
-        if (first) {
-          ctx.moveTo(pixel.x * dpr, pixel.y * dpr);
-          first = false;
-        } else {
-          ctx.lineTo(pixel.x * dpr, pixel.y * dpr);
-        }
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
   }
 
   private drawSelectedShape() {
