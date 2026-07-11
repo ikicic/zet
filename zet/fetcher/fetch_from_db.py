@@ -25,6 +25,7 @@ class CmdlineArgs:
     ws_port: int
     dt: float
     loop: bool
+    start: int
 
 
 def load_snapshots(db_path: str):
@@ -55,6 +56,11 @@ def replay(args: CmdlineArgs):
         logger.error("No realtime snapshots found in database.")
         return
 
+    if args.start < 0 or args.start >= len(realtime_rows):
+        logger.error(f"--start must be between 0 and "
+                     f"{len(realtime_rows) - 1}, got {args.start}")
+        return
+
     ws_server = WebSocketServer(
         args.ws_port, kinds_order=["static-snapshot", "realtime-snapshot"])
 
@@ -69,7 +75,7 @@ def replay(args: CmdlineArgs):
         logger.info(f"Sent static snapshot (fetched_at={fetched_at})")
 
     # Replay realtime snapshots.
-    idx = 0
+    idx = args.start
     while True:
         fetched_at, gzipped_data = realtime_rows[idx]
         data = json.dumps({
@@ -84,8 +90,8 @@ def replay(args: CmdlineArgs):
         idx += 1
         if idx >= len(realtime_rows):
             if args.loop:
-                idx = 0
-                logger.info("Looping back to the first snapshot.")
+                idx = args.start
+                logger.info(f"Looping back to snapshot {args.start}.")
             else:
                 logger.info("All snapshots sent. Waiting indefinitely "
                             "(Ctrl-C to stop).")
@@ -107,6 +113,8 @@ def main():
         help="Delay between replayed snapshots in seconds")
     add("--loop", action="store_true",
         help="Loop back to the beginning after the last snapshot")
+    add("--start", type=int, default=0,
+        help="Index of the first realtime snapshot to replay (0-based)")
     replay(CmdlineArgs(**vars(parser.parse_args())))
 
 
