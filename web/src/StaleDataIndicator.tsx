@@ -38,6 +38,11 @@ export function StaleDataIndicator({ lastUpdateTime }: StaleDataIndicatorProps) 
         setElapsed(Math.floor((Date.now() - lastUpdateTime) / 1000));
       }
     }, intervalMs);
+
+    if (lastUpdateTime != null) {
+      setElapsed(Math.floor((Date.now() - lastUpdateTime) / 1000));
+    }
+
     return () => clearInterval(interval);
   }, [lastUpdateTime, messageVisible]);
 
