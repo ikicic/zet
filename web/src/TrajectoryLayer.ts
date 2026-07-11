@@ -53,6 +53,99 @@ void main() {
 const FLOATS_PER_VERTEX = 3;
 const ANTIALIAS_WIDTH = 1.5;
 
+type Point = [number, number];
+type Vector = Point;
+
+interface JoinTriangle {
+  center: Point;
+  a: Point;
+  b: Point;
+  distanceA: number;
+  distanceB: number;
+  distanceC: number;
+}
+
+interface Segment {
+  a: Point;
+  b: Point;
+  d: Vector;
+  n: Vector;
+}
+
+interface SegmentCap {
+  left: Point;
+  right: Point;
+}
+
+interface Join {
+  outerTriangle: JoinTriangle | null;
+  innerTriangle: JoinTriangle | null;
+  prevEndLeft: Point;
+  prevEndRight: Point;
+  nextStartLeft: Point;
+  nextStartRight: Point;
+}
+
+function add(p: Point, v: Vector): Point {
+  return [p[0] + v[0], p[1] + v[1]];
+}
+
+function vec(from: Point, to: Point): Vector {
+  return [to[0] - from[0], to[1] - from[1]];
+}
+
+function scale(v: Vector, s: number): Vector {
+  return [v[0] * s, v[1] * s];
+}
+
+function length(v: Vector): number {
+  return Math.hypot(v[0], v[1]);
+}
+
+function lengthSq(v: Vector): number {
+  return v[0] * v[0] + v[1] * v[1];
+}
+
+function pointsEqual(a: Point, b: Point): boolean {
+  return a[0] === b[0] && a[1] === b[1];
+}
+
+function offset(
+  p: Point,
+  n: Vector,
+  extent: number,
+  side: 1 | -1
+): Point {
+  return add(p, scale(n, side * extent));
+}
+
+function cross2d(a: Vector, b: Vector): number {
+  return a[0] * b[1] - a[1] * b[0];
+}
+
+function segmentCap(p: Point, n: Vector, extent: number): SegmentCap {
+  return {
+    left: offset(p, n, extent, 1),
+    right: offset(p, n, extent, -1),
+  };
+}
+
+function wedgeTriangle(
+  center: Point,
+  a: Point,
+  b: Point,
+  edgeDistance: number
+): JoinTriangle {
+  return {
+    center,
+    a,
+    b,
+    distanceA: 0,
+    distanceB: edgeDistance,
+    distanceC: edgeDistance,
+  };
+}
+
 function createShader(
   gl: GL,
   type: number,
@@ -96,32 +189,55 @@ function createProgram(gl: GL): WebGLProgram {
   return program;
 }
 
-interface ExtrudedPoint {
-  left: [number, number];
-  right: [number, number];
-}
-
-function normalize(dx: number, dy: number): [number, number] {
-  const length = Math.hypot(dx, dy);
-  if (length < 0.0001) {
-    return [1, 0];
+function dedupeTrailPoints(points: Point[], minDist: number): Point[] {
+  if (points.length <= 1) {
+    return points;
   }
-  return [dx / length, dy / length];
+
+  const out: Point[] = [points[0]];
+  for (let i = 1; i < points.length - 1; ++i) {
+    if (length(vec(out[out.length - 1], points[i])) >= minDist) {
+      out.push(points[i]);
+    }
+  }
+
+  const last = points[points.length - 1];
+  if (out.length === 1 || length(vec(out[out.length - 1], last)) >= minDist) {
+    out.push(last);
+  } else {
+    out[out.length - 1] = last;
+  }
+  return out;
 }
 
-function pushVertex(
-  vertices: number[],
-  point: [number, number],
-  distance: number
-) {
+function buildSegments(points: Point[]): Segment[] {
+  const segments: Segment[] = [];
+  for (let i = 0; i < points.length - 1; ++i) {
+    const delta = vec(points[i], points[i + 1]);
+    const len = length(delta);
+    if (len < 1e-10) {
+      continue;
+    }
+    const d = scale(delta, 1 / len);
+    segments.push({
+      a: points[i],
+      b: points[i + 1],
+      d,
+      n: [-d[1], d[0]],
+    });
+  }
+  return segments;
+}
+
+function pushVertex(vertices: number[], point: Point, distance: number) {
   vertices.push(point[0], point[1], distance);
 }
 
 function pushTriangle(
   vertices: number[],
-  a: [number, number],
-  b: [number, number],
-  c: [number, number],
+  a: Point,
+  b: Point,
+  c: Point,
   distanceA: number,
   distanceB: number,
   distanceC: number
@@ -131,72 +247,130 @@ function pushTriangle(
   pushVertex(vertices, c, distanceC);
 }
 
-function pushPolyline(
+function emitQuad(
   vertices: number[],
-  points: Array<[number, number]>,
-  dpr: number
+  start: SegmentCap,
+  end: SegmentCap,
+  extent: number
 ) {
-  if (points.length < 2) {
+  pushTriangle(vertices, start.left, start.right, end.left, -extent, extent, -extent);
+  pushTriangle(vertices, end.left, start.right, end.right, -extent, extent, extent);
+}
+
+function emitJoinTriangle(vertices: number[], tri: JoinTriangle) {
+  pushTriangle(
+    vertices,
+    tri.center,
+    tri.a,
+    tri.b,
+    tri.distanceA,
+    tri.distanceB,
+    tri.distanceC
+  );
+}
+
+function innerBevelJoin(
+  p: Point,
+  prev: Segment,
+  next: Segment,
+  extent: number,
+  side: 1 | -1
+): {
+  prevCorner: Point;
+  nextCorner: Point;
+  innerTriangle: JoinTriangle | null;
+} {
+  const prevCorner = offset(p, prev.n, extent, side);
+  const nextCorner = offset(p, next.n, extent, side);
+  if (lengthSq(vec(prevCorner, nextCorner)) < 1e-8) {
+    return { prevCorner, nextCorner, innerTriangle: null };
+  }
+
+  return {
+    prevCorner,
+    nextCorner,
+    innerTriangle: wedgeTriangle(p, prevCorner, nextCorner, -side * extent),
+  };
+}
+
+function computeJoin(prev: Segment, next: Segment, extent: number): Join {
+  const p = prev.b;
+  const turn = cross2d(prev.d, next.d);
+
+  if (Math.abs(turn) < 1e-6) {
+    const cap = segmentCap(p, prev.n, extent);
+    return {
+      outerTriangle: null,
+      innerTriangle: null,
+      prevEndLeft: cap.left,
+      prevEndRight: cap.right,
+      nextStartLeft: cap.left,
+      nextStartRight: cap.right,
+    };
+  }
+
+  const ccw = turn > 0;
+  const outerSide: 1 | -1 = ccw ? 1 : -1;
+  const innerSide: 1 | -1 = ccw ? -1 : 1;
+  const inner = innerBevelJoin(p, prev, next, extent, innerSide);
+
+  return {
+    outerTriangle: wedgeTriangle(
+      p,
+      offset(p, prev.n, extent, outerSide),
+      offset(p, next.n, extent, outerSide),
+      -outerSide * extent
+    ),
+    innerTriangle: inner.innerTriangle,
+    prevEndLeft: ccw ? offset(p, prev.n, extent, 1) : inner.prevCorner,
+    prevEndRight: ccw ? inner.prevCorner : offset(p, prev.n, extent, -1),
+    nextStartLeft: ccw ? offset(p, next.n, extent, 1) : inner.nextCorner,
+    nextStartRight: ccw ? inner.nextCorner : offset(p, next.n, extent, -1),
+  };
+}
+
+function emitJoin(vertices: number[], join: Join) {
+  if (join.outerTriangle) {
+    emitJoinTriangle(vertices, join.outerTriangle);
+  }
+  if (join.innerTriangle) {
+    emitJoinTriangle(vertices, join.innerTriangle);
+  }
+}
+
+function pushPolyline(vertices: number[], points: Point[], dpr: number) {
+  const minDist = 0.5 * dpr;
+  const extent = dpr + 0.5 * ANTIALIAS_WIDTH;
+
+  const segments = buildSegments(dedupeTrailPoints(points, minDist));
+  if (segments.length === 0) {
     return;
   }
 
-  const radius = dpr;
-  const extent = radius + 0.5 * ANTIALIAS_WIDTH;
-  const extruded: ExtrudedPoint[] = [];
+  for (let i = 0; i < segments.length; ++i) {
+    const seg = segments[i];
+    const atChainStart = i === 0 || !pointsEqual(seg.a, segments[i - 1].b);
+    const atChainEnd =
+      i === segments.length - 1 || !pointsEqual(seg.b, segments[i + 1].a);
 
-  for (let i = 0; i < points.length; i++) {
-    let normalX: number;
-    let normalY: number;
-
-    if (i === 0) {
-      const [dx, dy] = normalize(
-        points[1][0] - points[0][0],
-        points[1][1] - points[0][1]
-      );
-      normalX = -dy;
-      normalY = dx;
-    } else if (i === points.length - 1) {
-      const [dx, dy] = normalize(
-        points[i][0] - points[i - 1][0],
-        points[i][1] - points[i - 1][1]
-      );
-      normalX = -dy;
-      normalY = dx;
+    let start: SegmentCap;
+    if (atChainStart) {
+      start = segmentCap(seg.a, seg.n, extent);
     } else {
-      const [prevDx, prevDy] = normalize(
-        points[i][0] - points[i - 1][0],
-        points[i][1] - points[i - 1][1]
-      );
-      const [nextDx, nextDy] = normalize(
-        points[i + 1][0] - points[i][0],
-        points[i + 1][1] - points[i][1]
-      );
-      const prevNormalX = -prevDy;
-      const prevNormalY = prevDx;
-      const nextNormalX = -nextDy;
-      const nextNormalY = nextDx;
-      [normalX, normalY] = normalize(
-        prevNormalX + nextNormalX,
-        prevNormalY + nextNormalY
-      );
-      const denom = normalX * nextNormalX + normalY * nextNormalY;
-      const miterScale = Math.min(2.5, Math.max(1, 1 / Math.max(0.35, denom)));
-      normalX *= miterScale;
-      normalY *= miterScale;
+      const join = computeJoin(segments[i - 1], seg, extent);
+      emitJoin(vertices, join);
+      start = { left: join.nextStartLeft, right: join.nextStartRight };
     }
 
-    const [x, y] = points[i];
-    extruded.push({
-      left: [x - normalX * extent, y - normalY * extent],
-      right: [x + normalX * extent, y + normalY * extent],
-    });
-  }
+    let end: SegmentCap;
+    if (atChainEnd) {
+      end = segmentCap(seg.b, seg.n, extent);
+    } else {
+      const join = computeJoin(seg, segments[i + 1], extent);
+      end = { left: join.prevEndLeft, right: join.prevEndRight };
+    }
 
-  for (let i = 0; i < extruded.length - 1; i++) {
-    const a = extruded[i];
-    const b = extruded[i + 1];
-    pushTriangle(vertices, a.left, a.right, b.left, -extent, extent, -extent);
-    pushTriangle(vertices, b.left, a.right, b.right, -extent, extent, extent);
+    emitQuad(vertices, start, end, extent);
   }
 }
 
@@ -315,8 +489,8 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
         continue;
       }
 
-      const points: Array<[number, number]> = [];
-      for (let i = 0; i < vehicle.lon.length; i++) {
+      const points: Point[] = [];
+      for (let i = 0; i < vehicle.lon.length; ++i) {
         const point = this.map.project([vehicle.lon[i], vehicle.lat[i]]);
         points.push([point.x * dpr, point.y * dpr]);
       }

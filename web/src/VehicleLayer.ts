@@ -242,7 +242,7 @@ export class VehicleLayer {
     ctx.lineJoin = "round";
 
     let first = true;
-    for (let i = 0; i < shape.lons.length; i++) {
+    for (let i = 0; i < shape.lons.length; ++i) {
       const pixel = this.map.project([shape.lons[i], shape.lats[i]]);
       if (first) {
         ctx.moveTo(pixel.x * dpr, pixel.y * dpr);

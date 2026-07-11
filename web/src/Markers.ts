@@ -136,7 +136,7 @@ function renderMarker(
     const deltaPhi = (50 * Math.PI) / 180;
 
     const NUM_SAMPLES = 90;
-    for (let i = 0; i <= NUM_SAMPLES; i++) {
+    for (let i = 0; i <= NUM_SAMPLES; ++i) {
       const theta = phi + (i / NUM_SAMPLES) * 2 * Math.PI;
       const r = calculateSimplifiedTeardropRadiusAtAngle(
         theta,
