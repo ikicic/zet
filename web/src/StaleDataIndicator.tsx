@@ -23,7 +23,9 @@ interface StaleDataIndicatorProps {
   lastUpdateTime: number | null;
 }
 
-export function StaleDataIndicator({ lastUpdateTime }: StaleDataIndicatorProps) {
+export function StaleDataIndicator({
+  lastUpdateTime,
+}: StaleDataIndicatorProps) {
   const [elapsed, setElapsed] = useState<number>(0);
   const [showMessage, setShowMessage] = useState(false);
   const [hovering, setHovering] = useState(false);
@@ -49,7 +51,10 @@ export function StaleDataIndicator({ lastUpdateTime }: StaleDataIndicatorProps) 
   useEffect(() => {
     if (!showMessage) return;
     const handleMouseDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
         setShowMessage(false);
       }
     };
@@ -61,7 +66,10 @@ export function StaleDataIndicator({ lastUpdateTime }: StaleDataIndicatorProps) 
     return null;
   }
 
-  const colorClass = elapsed >= CRITICAL_THRESHOLD_SECONDS ? "stale-dot-red" : "stale-dot-orange";
+  const colorClass =
+    elapsed >= CRITICAL_THRESHOLD_SECONDS
+      ? "stale-dot-red"
+      : "stale-dot-orange";
 
   return (
     <div className="stale-indicator" ref={containerRef}>

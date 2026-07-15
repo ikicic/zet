@@ -110,12 +110,7 @@ function pointsEqual(a: Point, b: Point): boolean {
   return a[0] === b[0] && a[1] === b[1];
 }
 
-function offset(
-  p: Point,
-  n: Vector,
-  extent: number,
-  side: 1 | -1
-): Point {
+function offset(p: Point, n: Vector, extent: number, side: 1 | -1): Point {
   return add(p, scale(n, side * extent));
 }
 
@@ -134,7 +129,7 @@ function wedgeTriangle(
   center: Point,
   a: Point,
   b: Point,
-  edgeDistance: number
+  edgeDistance: number,
 ): JoinTriangle {
   return {
     center,
@@ -146,11 +141,7 @@ function wedgeTriangle(
   };
 }
 
-function createShader(
-  gl: GL,
-  type: number,
-  source: string
-): WebGLShader {
+function createShader(gl: GL, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
   if (!shader) {
     throw new Error("Failed to create trajectory shader");
@@ -170,7 +161,7 @@ function createProgram(gl: GL): WebGLProgram {
   const fragmentShader = createShader(
     gl,
     gl.FRAGMENT_SHADER,
-    FRAGMENT_SHADER_SOURCE
+    FRAGMENT_SHADER_SOURCE,
   );
   const program = gl.createProgram();
   if (!program) {
@@ -240,7 +231,7 @@ function pushTriangle(
   c: Point,
   distanceA: number,
   distanceB: number,
-  distanceC: number
+  distanceC: number,
 ) {
   pushVertex(vertices, a, distanceA);
   pushVertex(vertices, b, distanceB);
@@ -251,10 +242,26 @@ function emitQuad(
   vertices: number[],
   start: SegmentCap,
   end: SegmentCap,
-  extent: number
+  extent: number,
 ) {
-  pushTriangle(vertices, start.left, start.right, end.left, -extent, extent, -extent);
-  pushTriangle(vertices, end.left, start.right, end.right, -extent, extent, extent);
+  pushTriangle(
+    vertices,
+    start.left,
+    start.right,
+    end.left,
+    -extent,
+    extent,
+    -extent,
+  );
+  pushTriangle(
+    vertices,
+    end.left,
+    start.right,
+    end.right,
+    -extent,
+    extent,
+    extent,
+  );
 }
 
 function emitJoinTriangle(vertices: number[], tri: JoinTriangle) {
@@ -265,7 +272,7 @@ function emitJoinTriangle(vertices: number[], tri: JoinTriangle) {
     tri.b,
     tri.distanceA,
     tri.distanceB,
-    tri.distanceC
+    tri.distanceC,
   );
 }
 
@@ -274,7 +281,7 @@ function innerBevelJoin(
   prev: Segment,
   next: Segment,
   extent: number,
-  side: 1 | -1
+  side: 1 | -1,
 ): {
   prevCorner: Point;
   nextCorner: Point;
@@ -319,7 +326,7 @@ function computeJoin(prev: Segment, next: Segment, extent: number): Join {
       p,
       offset(p, prev.n, extent, outerSide),
       offset(p, next.n, extent, outerSide),
-      -outerSide * extent
+      -outerSide * extent,
     ),
     innerTriangle: inner.innerTriangle,
     prevEndLeft: ccw ? offset(p, prev.n, extent, 1) : inner.prevCorner,
@@ -428,7 +435,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
   setData(
     vehicles: Vehicle[],
     filterSelection: Set<RouteId>,
-    highlightedRouteId: RouteId | null
+    highlightedRouteId: RouteId | null,
   ) {
     this.vehicles = vehicles;
     this.filterSelection = filterSelection;
@@ -502,7 +509,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     this.gl.bufferData(
       this.gl.ARRAY_BUFFER,
       new Float32Array(vertices),
-      this.gl.DYNAMIC_DRAW
+      this.gl.DYNAMIC_DRAW,
     );
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, null);
   }

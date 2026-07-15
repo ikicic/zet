@@ -77,7 +77,7 @@ async function getSelectedShape(
   selectedShapeId: string | null,
   loadedBigStaticData: LoadedBigStaticData | null,
   activeStaticKey: string | null,
-  setLoadedBigStaticData: (data: LoadedBigStaticData) => void
+  setLoadedBigStaticData: (data: LoadedBigStaticData) => void,
 ): Promise<Shape | null> {
   if (selectedShapeId == null || activeStaticKey == null) {
     return null;
@@ -122,7 +122,7 @@ export function Map() {
   const selectedShapeRef = useRef<Shape | null>(null);
   const realTimeData = useRef<RealTimeState | null>(null);
   const highlightedVehicleCriterion = useRef<HighlightedVehicleCriterion>(
-    new HighlightedVehicleCriterion()
+    new HighlightedVehicleCriterion(),
   );
   const filterControlRef = useRef<FilterControl | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<number | null>(null);
@@ -148,14 +148,14 @@ export function Map() {
         realTimeData.current.vehicles,
         activeSelection,
         highlightedRouteId,
-        selectedShapeRef.current
+        selectedShapeRef.current,
       );
     }
 
     trajectoryLayerRef.current?.setData(
       realTimeData.current.vehicles,
       activeSelection,
-      highlightedRouteId
+      highlightedRouteId,
     );
 
     // Determine if any markers are visible for the filter control
@@ -170,12 +170,12 @@ export function Map() {
     if (filterControlRef.current != null) {
       filterControlRef.current.updateState(
         filterStateRef.current,
-        anyMarkerVisibleRef.current
+        anyMarkerVisibleRef.current,
       );
     }
 
     const collisionSource = mapRef.current.getSource(
-      "collision-proxy"
+      "collision-proxy",
     ) as maplibregl.GeoJSONSource;
     if (collisionSource) {
       collisionSource.setData({
@@ -231,7 +231,7 @@ export function Map() {
           enableHighAccuracy: true,
         },
         trackUserLocation: true,
-      })
+      }),
     );
 
     map.addControl(new InfoControl(() => setShowInfo(true)));
@@ -300,7 +300,7 @@ export function Map() {
         onVehicleClick: (vehicle) => {
           setSelectedShapeId(vehicle.shapeId);
           highlightedVehicleCriterion.current.setSelectedRouteId(
-            vehicle.routeId
+            vehicle.routeId,
           );
           if (!vehicle.shapeId) {
             redraw();
@@ -338,7 +338,7 @@ export function Map() {
       selectedShapeId,
       loadedBigStaticData,
       activeStaticKey,
-      setLoadedBigStaticData
+      setLoadedBigStaticData,
     ).then((shape) => {
       selectedShapeRef.current = shape;
       setSelectedShape(shape);
@@ -446,7 +446,7 @@ export function Map() {
     if (filterControlRef.current != null) {
       filterControlRef.current.updateState(
         filterState,
-        anyMarkerVisibleRef.current
+        anyMarkerVisibleRef.current,
       );
     }
   }, [filterState]);

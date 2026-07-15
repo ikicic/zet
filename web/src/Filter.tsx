@@ -19,7 +19,7 @@ export interface FilterState {
 
 export function useFilterState(
   key: string,
-  initialValue: FilterState
+  initialValue: FilterState,
 ): [FilterState, (filterState: FilterState) => void] {
   const [filterState, setFilterState] = useLocalStorage<FilterState>(
     key,
@@ -37,7 +37,7 @@ export function useFilterState(
           enabled: parsed.enabled,
         };
       },
-    }
+    },
   );
   return [filterState, setFilterState];
 }
@@ -74,7 +74,7 @@ function categorizeRoutes(routeIds: RouteId[]) {
 // Helper function to get tri-state value
 function getTriStateValue(
   selection: Set<RouteId>,
-  subset: RouteId[]
+  subset: RouteId[],
 ): "unchecked" | "checked" | "partial" {
   let count = 0;
   for (const routeId of subset) {
@@ -85,8 +85,8 @@ function getTriStateValue(
   return count === 0
     ? "unchecked"
     : count === subset.length
-    ? "checked"
-    : "partial";
+      ? "checked"
+      : "partial";
 }
 
 function VehicleCategory({
@@ -308,7 +308,7 @@ export class FilterControl {
           this.onToggleFilter(enabled);
         }}
         onShowFilter={this.onShowFilter}
-      />
+      />,
     );
   }
 }

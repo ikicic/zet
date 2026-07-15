@@ -8,7 +8,7 @@ interface UseLocalStorageOptions<T> {
 export function useLocalStorage<T>(
   key: string,
   initialValue: T,
-  options: UseLocalStorageOptions<T> = {}
+  options: UseLocalStorageOptions<T> = {},
 ): [T, (value: T) => void] {
   const { serialize = JSON.stringify, deserialize = JSON.parse } = options;
 
@@ -37,7 +37,7 @@ export function useLocalStorage<T>(
         console.warn(`Error saving to localStorage key "${key}":`, error);
       }
     },
-    [key, serialize]
+    [key, serialize],
   );
 
   const setValue = useCallback(
@@ -45,7 +45,7 @@ export function useLocalStorage<T>(
       setStoredValue(value);
       saveToStorage(value);
     },
-    [saveToStorage]
+    [saveToStorage],
   );
 
   return [storedValue, setValue];

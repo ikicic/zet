@@ -112,7 +112,7 @@ function decompressVehicles(data: CompressedVehicles): Vehicle[] {
 }
 
 export function decompressRealTimeState(
-  data: CompressedRealTimeState
+  data: CompressedRealTimeState,
 ): RealTimeState {
   return {
     vehicles: decompressVehicles(data.vehicles),
@@ -122,7 +122,7 @@ export function decompressRealTimeState(
 }
 
 export function decompressBigStaticData(
-  data: CompressedBigStaticData
+  data: CompressedBigStaticData,
 ): BigStaticData {
   const shapes: { [key: ShapeId]: Shape } = {};
   for (let i = 0, n = data.shapes.ids.length; i < n; ++i) {
@@ -130,10 +130,10 @@ export function decompressBigStaticData(
     shapes[shapeId] = {
       id: shapeId,
       lats: STATIC_REFERENCE_SYSTEM.decompress_lats(
-        data.shapes.compressedLats[i]
+        data.shapes.compressedLats[i],
       ),
       lons: STATIC_REFERENCE_SYSTEM.decompress_lons(
-        data.shapes.compressedLons[i]
+        data.shapes.compressedLons[i],
       ),
     };
   }
@@ -141,7 +141,7 @@ export function decompressBigStaticData(
 }
 
 export function decompressSmallStaticData(
-  data: CompressedSmallStaticData
+  data: CompressedSmallStaticData,
 ): SmallStaticData {
   return {
     routeIds: data.routes.ids,

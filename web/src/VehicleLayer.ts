@@ -51,7 +51,7 @@ export class VehicleLayer {
   constructor(
     map: maplibregl.Map,
     markerManager: MarkerManager,
-    options: VehicleLayerOptions
+    options: VehicleLayerOptions,
   ) {
     this.map = map;
     this.markerManager = markerManager;
@@ -93,7 +93,7 @@ export class VehicleLayer {
     vehicles: Vehicle[],
     filterSelection: Set<RouteId>,
     highlightedRouteId: RouteId | null,
-    selectedShape: Shape | null
+    selectedShape: Shape | null,
   ) {
     this.vehicles = vehicles;
     this.filterSelection = filterSelection;
@@ -296,7 +296,7 @@ export class VehicleLayer {
       pixel.x * dpr - sw / 2,
       pixel.y * dpr - sh / 2,
       sw,
-      sh
+      sh,
     );
 
     this.lastRenderedMarkers.push({

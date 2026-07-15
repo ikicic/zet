@@ -62,7 +62,7 @@ function calculateSimplifiedTeardropRadiusAtAngle(
   b: number,
   phi: number, // Direction of the teardrop tip (canvas angle, 0 to 2PI)
   deltaPhi: number, // Half angular width of the arrow's base in radians
-  arrowExtensionHeight: number
+  arrowExtensionHeight: number,
 ): number {
   const ellipseRadius = ellipseRadiusAtAngle(theta, a, b);
   const deltaAngle = Math.abs(normalizeAngle(theta - phi));
@@ -80,7 +80,7 @@ function calculateSimplifiedTeardropRadiusAtAngle(
 }
 
 function renderMarker(
-  marker: MarkerProperties
+  marker: MarkerProperties,
 ): [HTMLCanvasElement, CanvasRenderingContext2D, MarkerShape] {
   const canvas = document.createElement("canvas");
   const PIXEL_RATIO = window.devicePixelRatio;
@@ -144,7 +144,7 @@ function renderMarker(
         ehh,
         phi,
         deltaPhi,
-        ARROW_EXTENSION
+        ARROW_EXTENSION,
       );
       const px = cx + r * Math.cos(theta);
       const py = cy + r * Math.sin(theta);

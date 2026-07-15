@@ -26,7 +26,8 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
       <p>
         <i>
           Napomena: zet.skoljka.org je neslužbena aplikacija, neovisna o ZET-u.
-          Za informacije o voznom redu, molimo kontaktirajte <a href="https://www.zet.hr/kontakti-276/276">ZET</a>.
+          Za informacije o voznom redu, molimo kontaktirajte{" "}
+          <a href="https://www.zet.hr/kontakti-276/276">ZET</a>.
         </i>
       </p>
       <p>
@@ -59,9 +60,7 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
       <p>
         <ExternalLink href="https://github.com/ikicic/zet">GitHub</ExternalLink>
         {" | "}
-        <ExternalLink href="/privacy.html">
-          Pravila privatnosti
-        </ExternalLink>
+        <ExternalLink href="/privacy.html">Pravila privatnosti</ExternalLink>
       </p>
       <hr className="feedback-separator" />
       <FeedbackForm />

@@ -33,7 +33,10 @@ export function FeedbackForm() {
       const data = await response.json();
 
       if (response.ok) {
-        setStatus({ type: "success", text: data.message || "Hvala na poruci!" });
+        setStatus({
+          type: "success",
+          text: data.message || "Hvala na poruci!",
+        });
         setMessage("");
         setEmail("");
       } else {
