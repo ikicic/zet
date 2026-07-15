@@ -580,7 +580,7 @@ class GtfsServer:
         while True:
             try:
                 async with websockets.connect(
-                        self.fetcher_url, max_size=50*1024*1024) as websocket:
+                        self.fetcher_url, max_size=200*1024*1024) as websocket:
                     # Reset backoff time on successful connection
                     backoff_time = 1
                     while True:
