@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -27,6 +27,19 @@ import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
+import {
+  getNewsBadge,
+  deserializeNewsSnapshot,
+  deserializeSeenNews,
+  isNewsSnapshot,
+  markNewsSeen,
+  NewsControl,
+  NewsOverlay,
+  NEWS_SEEN_KEY,
+  NEWS_SNAPSHOT_KEY,
+  NewsSnapshot,
+} from "./News";
+import { useLocalStorage } from "./useLocalStorage";
 
 const PERFORMANCE_MODE =
   new URLSearchParams(window.location.search).get("perf") === "1";
@@ -127,6 +140,33 @@ export function Map() {
   );
   const [mapCanvasDpr, setMapCanvasDpr] = useState<number | null>(null);
   const [perfMap, setPerfMap] = useState<maplibregl.Map | null>(null);
+  const [news, setNews] = useLocalStorage<NewsSnapshot | null>(
+    NEWS_SNAPSHOT_KEY,
+    null,
+    { deserialize: deserializeNewsSnapshot },
+  );
+  const [seenNews, setSeenNews] = useLocalStorage<Record<
+    string,
+    number
+  > | null>(NEWS_SEEN_KEY, null, { deserialize: deserializeSeenNews });
+  const [showNews, setShowNews] = useState(false);
+  const newsRef = useRef<NewsSnapshot | null>(news);
+  const seenNewsRef = useRef(seenNews);
+  const newsControlRef = useRef<NewsControl | null>(null);
+
+  const openNews = () => {
+    const currentNews = newsRef.current;
+    if (currentNews) {
+      const updatedSeen = markNewsSeen(
+        seenNewsRef.current ?? {},
+        currentNews.items,
+      );
+      seenNewsRef.current = updatedSeen;
+      setSeenNews(updatedSeen);
+    }
+    setShowNews(true);
+  };
+  const closeNews = useCallback(() => setShowNews(false), []);
 
   const redraw = () => {
     if (
@@ -237,6 +277,12 @@ export function Map() {
     );
 
     map.addControl(new InfoControl(() => setShowInfo(true)));
+    const newsControl = new NewsControl(openNews);
+    newsControlRef.current = newsControl;
+    map.addControl(newsControl, "top-right");
+    newsControl.setBadge(
+      getNewsBadge(newsRef.current?.items, seenNewsRef.current ?? {}),
+    );
     if (__DEV__) {
       map.addControl(
         {
@@ -386,6 +432,7 @@ export function Map() {
         map.off("resize", updateMapCanvasDpr);
       }
       map.remove();
+      newsControlRef.current = null;
     };
   }, []);
 
@@ -432,7 +479,8 @@ export function Map() {
       }
 
       // Manually change to the dev websocket server port in http.
-      const url = getUrl("ws", "wss", "ws-v2");
+      const url = new URL(getUrl("ws", "wss", "ws-v3"));
+      url.searchParams.set("last_news_version", newsRef.current?.version ?? "");
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => {
@@ -441,8 +489,29 @@ export function Map() {
       });
 
       ws.addEventListener("message", (event) => {
-        const data: CompressedRealTimeState = JSON.parse(event.data);
-        const state: RealTimeState = decompressRealTimeState(data);
+        const data = JSON.parse(event.data);
+        const isNewsMessage =
+          typeof data === "object" &&
+          data != null &&
+          !Array.isArray(data) &&
+          data.type === "news";
+        if (isNewsMessage) {
+          if (!isNewsSnapshot(data)) {
+            console.warn("Ignoring invalid news snapshot");
+            return;
+          }
+          const snapshot = data;
+          if (seenNewsRef.current === null) {
+            const updatedSeen = markNewsSeen({}, snapshot.items);
+            seenNewsRef.current = updatedSeen;
+            setSeenNews(updatedSeen);
+          }
+          newsRef.current = snapshot;
+          setNews(snapshot);
+          return;
+        }
+        const stateData = data as CompressedRealTimeState;
+        const state: RealTimeState = decompressRealTimeState(stateData);
         realTimeData.current = state;
         setLastUpdateTime(state.timestamp * 1000);
         // Try to display data - redraw() will check if map is ready
@@ -488,6 +557,19 @@ export function Map() {
     };
   }, []);
 
+  useEffect(() => {
+    newsRef.current = news;
+    if (news && seenNews === null) {
+      const updatedSeen = markNewsSeen({}, news.items);
+      seenNewsRef.current = updatedSeen;
+      setSeenNews(updatedSeen);
+      newsControlRef.current?.setBadge(getNewsBadge(news.items, updatedSeen));
+      return;
+    }
+    seenNewsRef.current = seenNews;
+    newsControlRef.current?.setBadge(getNewsBadge(news?.items, seenNews ?? {}));
+  }, [news, seenNews]);
+
   const onFilterSelectionChange = (newSelection: Set<RouteId>) => {
     const newFilterState = {
       selection: newSelection,
@@ -521,6 +603,7 @@ export function Map() {
         )}
       </div>
       {showInfo && <InfoOverlay onClose={() => setShowInfo(false)} />}
+      {showNews && <NewsOverlay snapshot={news} onClose={closeNews} />}
       {showFilter && (
         <FilterOverlay
           onClose={() => setShowFilter(false)}

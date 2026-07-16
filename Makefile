@@ -16,4 +16,7 @@ clean:
 	rm -rf $(VENV_DIR)
 	rm -rf web/node_modules
 
-.PHONY: all clean
+test: $(VENV_DIR)/bin/activate
+	$(VENV_DIR)/bin/python -m unittest discover -s tests -p 'test_*.py'
+
+.PHONY: all clean test

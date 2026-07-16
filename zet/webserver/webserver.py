@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 import argparse
@@ -23,6 +24,7 @@ import simple_websocket
 import websockets
 
 import zet.math.latlon as latlon
+from zet.webserver.news import NEWS_FETCH_INTERVAL_SECONDS, NewsCache
 from zet.utils.email import send_feedback_email
 from zet.utils.pushover import RateLimitedNotifier
 
@@ -42,8 +44,6 @@ sock = Sock(app)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# TODO: Take last two-three static messages into account.
 
 @dataclass
 class StaticReferenceSystem:
@@ -465,8 +465,10 @@ class GtfsServer:
         self.ws_clients: set[WsClient] = set()
         self.ws_clients_lock = threading.Lock()
         self.latest_message: WsOutputMessageVariants | None = None
+        self.news_cache = NewsCache()
 
         self._send_time = 0
+        self._send_lock = threading.Lock()
         self.recent_static_snapshots: list[StaticDataSnapshot] = []
         self.last_realtime_update: float = 0
         self.notifier = RateLimitedNotifier(cooldown=3600)
@@ -596,19 +598,42 @@ class GtfsServer:
     def update_feed_continuously(self):
         asyncio.run(self.fetch_data_from_fetcher())
 
-    def _notify_clients(self, message: WsOutputMessageVariants):
+    def _notify_clients(self, message: WsOutputMessageVariants) -> None:
+        self._notify_message(lambda client: message.for_version(client.version))
+
+    def _notify_news_clients(self) -> None:
+        message = self.news_cache.message()
+        if message is None:
+            return
+        self._notify_message(
+            lambda client: message if client.version >= 3 else None)
+
+    def _notify_message(
+            self,
+            message_for_client: Callable[[WsClient], str | None],
+    ) -> None:
         dead_clients: set[WsClient] = set()
-        with self.ws_clients_lock:
-            clients = list(self.ws_clients)
-        start_time = time.time()
-        for client in clients:
-            try:
-                client.ws.send(message.for_version(client.version))
-            except Exception:
-                dead_clients.add(client)
+        with self._send_lock:
+            with self.ws_clients_lock:
+                clients = list(self.ws_clients)
+            start_time = time.time()
+            for client in clients:
+                message = message_for_client(client)
+                if message is None:
+                    continue
+                try:
+                    client.ws.send(message)
+                except Exception:
+                    dead_clients.add(client)
         with self.ws_clients_lock:
             self.ws_clients -= dead_clients
-            self._send_time = time.time() - start_time
+        self._send_time = time.time() - start_time
+
+    def update_news_continuously(self) -> None:
+        while True:
+            if self.news_cache.refresh():
+                self._notify_news_clients()
+            time.sleep(NEWS_FETCH_INTERVAL_SECONDS)
 
     def handle_big_static_data_request(self, key: str) -> tuple[str, int]:
         for snapshot in self.recent_static_snapshots:
@@ -626,7 +651,11 @@ class GtfsServer:
 gtfs_server: GtfsServer | None = None
 
 
-def handle_websocket(ws: simple_websocket.ws.Server, version: int):
+def handle_websocket(
+    ws: simple_websocket.ws.Server,
+    version: int,
+    last_news_version: str | None = None,
+):
     if gtfs_server is None:
         raise Exception("gtfs_server is not initialized")
     client = WsClient(ws=ws, version=version)
@@ -635,8 +664,14 @@ def handle_websocket(ws: simple_websocket.ws.Server, version: int):
     logger.info("Client connected. Number of clients: %d",
                 len(gtfs_server.ws_clients))
     try:
-        if gtfs_server.latest_message:
-            client.ws.send(gtfs_server.latest_message.for_version(version))
+        with gtfs_server._send_lock:
+            if gtfs_server.latest_message:
+                client.ws.send(gtfs_server.latest_message.for_version(version))
+            if (version >= 3
+                    and last_news_version != gtfs_server.news_cache.version()):
+                news_message = gtfs_server.news_cache.message()
+                if news_message is not None:
+                    client.ws.send(news_message)
         while True:
             # Keep connection alive and wait for any client messages
             message = ws.receive()
@@ -645,7 +680,7 @@ def handle_websocket(ws: simple_websocket.ws.Server, version: int):
         pass
     finally:
         with gtfs_server.ws_clients_lock:
-            gtfs_server.ws_clients.remove(client)
+            gtfs_server.ws_clients.discard(client)
 
 
 @sock.route('/ws')
@@ -663,6 +698,16 @@ def websocket_v2(ws: simple_websocket.ws.Server):
     """v2 only removes the redundant duplicate backward-compatibility key
     latestStaticKey."""
     handle_websocket(ws, version=2)
+
+
+@sock.route('/ws-v3')
+def websocket_v3(ws: simple_websocket.ws.Server):
+    """v3 keeps bare realtime messages and adds separate typed messages."""
+    handle_websocket(
+        ws,
+        version=3,
+        last_news_version=request.args.get('last_news_version'),
+    )
 
 
 @app.route('/static/<key>')
@@ -762,6 +807,9 @@ def main():
         staleness_thread.start()
     else:
         gtfs_server.update_feed_from_file(args.file)
+    news_thread = threading.Thread(
+        target=gtfs_server.update_news_continuously, daemon=True)
+    news_thread.start()
 
     app.run(port=args.port, host=args.host)
 

@@ -6,6 +6,8 @@ interface OverlayProps {
   children: React.ReactNode;
   onBackgroundClick?: (e: React.MouseEvent) => void;
   verticalPosition?: "middle" | "bottom";
+  className?: string;
+  showCloseButton?: boolean;
 }
 
 export function Overlay({
@@ -13,6 +15,8 @@ export function Overlay({
   children,
   onBackgroundClick,
   verticalPosition = "middle",
+  className = "",
+  showCloseButton = true,
 }: OverlayProps) {
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -37,10 +41,12 @@ export function Overlay({
 
   return (
     <div className="overlay" onClick={handleBackgroundClick}>
-      <div className={`overlay-content ${verticalPositionClass}`}>
-        <button className="overlay-close-button" onClick={onClose}>
-          ✕
-        </button>
+      <div className={`overlay-content ${verticalPositionClass} ${className}`}>
+        {showCloseButton && (
+          <button className="overlay-close-button" onClick={onClose}>
+            ✕
+          </button>
+        )}
         {children}
       </div>
     </div>

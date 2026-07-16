@@ -1,4 +1,10 @@
-import { useState, useCallback } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 interface UseLocalStorageOptions<T> {
   serialize?: (value: T) => string;
@@ -9,7 +15,7 @@ export function useLocalStorage<T>(
   key: string,
   initialValue: T,
   options: UseLocalStorageOptions<T> = {},
-): [T, (value: T) => void] {
+): [T, Dispatch<SetStateAction<T>>] {
   const { serialize = JSON.stringify, deserialize = JSON.parse } = options;
 
   // Get initial value from localStorage or use provided initial value
@@ -28,6 +34,7 @@ export function useLocalStorage<T>(
 
   // State to store our value
   const [storedValue, setStoredValue] = useState<T>(getStoredValue);
+  const valueRef = useRef(storedValue);
 
   const saveToStorage = useCallback(
     (value: T) => {
@@ -41,9 +48,14 @@ export function useLocalStorage<T>(
   );
 
   const setValue = useCallback(
-    (value: T) => {
-      setStoredValue(value);
-      saveToStorage(value);
+    (value: SetStateAction<T>) => {
+      const nextValue =
+        typeof value === "function"
+          ? (value as (previousValue: T) => T)(valueRef.current)
+          : value;
+      valueRef.current = nextValue;
+      setStoredValue(nextValue);
+      saveToStorage(nextValue);
     },
     [saveToStorage],
   );
