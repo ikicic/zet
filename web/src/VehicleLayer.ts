@@ -105,6 +105,9 @@ export class VehicleLayer {
     this.trajectoryLayer = new TrajectoryLayer();
     this.markerLayer = new WebGLMarkerRenderer();
     this.markerLayer.setFrameBuilder(() => this.buildMarkers());
+    this.markerLayer.setBetweenMarkerGroups((gl) =>
+      this.trajectoryLayer.renderSelectedShape(gl),
+    );
 
     map.addLayer(this.trajectoryLayer);
     map.addLayer(this.markerLayer);
@@ -325,6 +328,7 @@ export class VehicleLayer {
     for (const vehicle of unselected) {
       addVehicle(vehicle, false);
     }
+    this.markerLayer.finishUnselectedMarkers();
     for (const vehicle of highlighted) {
       addVehicle(vehicle, true);
     }

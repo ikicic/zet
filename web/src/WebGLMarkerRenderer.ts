@@ -133,11 +133,19 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   private atlas: MarkerAtlas | null = null;
   private instanceData = new Float32Array(1024 * FLOATS_PER_INSTANCE);
   private instanceCount = 0;
+  private unselectedInstanceCount = 0;
   private frameBuilder: (() => void) | null = null;
+  private betweenMarkerGroups: ((gl: WebGL2RenderingContext) => void) | null =
+    null;
 
   /** Called at the start of each custom-layer render, before drawing. */
   setFrameBuilder(fn: () => void) {
     this.frameBuilder = fn;
+  }
+
+  /** Draws after unselected markers and before highlighted markers. */
+  setBetweenMarkerGroups(fn: (gl: WebGL2RenderingContext) => void) {
+    this.betweenMarkerGroups = fn;
   }
 
   /** Atlas reference used for texture uploads during render. */
@@ -156,6 +164,12 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
       );
     }
     this.instanceCount = 0;
+    this.unselectedInstanceCount = 0;
+  }
+
+  /** Finish adding the unselected-marker group for this frame. */
+  finishUnselectedMarkers() {
+    this.unselectedInstanceCount = this.instanceCount;
   }
 
   addInstance(
@@ -275,6 +289,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
 
     const count = this.instanceCount;
     if (count === 0) {
+      this.betweenMarkerGroups?.(gl);
       return;
     }
 
@@ -302,9 +317,18 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.DEPTH_TEST);
 
-    gl.bindVertexArray(this.vao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-    gl.bindVertexArray(null);
+    this.drawInstances(gl, 0, this.unselectedInstanceCount);
+    this.betweenMarkerGroups?.(gl);
+
+    // The trajectory renderer changes the current program and buffer state.
+    gl.useProgram(this.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
+    this.drawInstances(
+      gl,
+      this.unselectedInstanceCount,
+      count - this.unselectedInstanceCount,
+    );
 
     gl.disableVertexAttribArray(0);
     gl.disableVertexAttribArray(1);
@@ -313,6 +337,60 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.disableVertexAttribArray(4);
     gl.disableVertexAttribArray(5);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  private drawInstances(
+    gl: WebGL2RenderingContext,
+    start: number,
+    count: number,
+  ) {
+    if (count === 0 || !this.vao || !this.instanceBuffer) return;
+
+    const instanceOffset = start * BYTES_PER_INSTANCE;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+    gl.vertexAttribPointer(
+      1,
+      2,
+      gl.FLOAT,
+      false,
+      BYTES_PER_INSTANCE,
+      instanceOffset,
+    );
+    gl.vertexAttribPointer(
+      2,
+      4,
+      gl.FLOAT,
+      false,
+      BYTES_PER_INSTANCE,
+      instanceOffset + 8,
+    );
+    gl.vertexAttribPointer(
+      3,
+      2,
+      gl.FLOAT,
+      false,
+      BYTES_PER_INSTANCE,
+      instanceOffset + 24,
+    );
+    gl.vertexAttribPointer(
+      4,
+      2,
+      gl.FLOAT,
+      false,
+      BYTES_PER_INSTANCE,
+      instanceOffset + 32,
+    );
+    gl.vertexAttribPointer(
+      5,
+      4,
+      gl.FLOAT,
+      false,
+      BYTES_PER_INSTANCE,
+      instanceOffset + 40,
+    );
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+    gl.bindVertexArray(null);
   }
 
   private uploadAtlas(gl: WebGL2RenderingContext, atlas: MarkerAtlas) {

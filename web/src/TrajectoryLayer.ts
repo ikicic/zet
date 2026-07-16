@@ -476,30 +476,48 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
       gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
     }
 
-    if (this.selectedShape && this.map) {
-      const shapeVertices: number[] = [];
-      const points: Point[] = [];
-      for (let i = 0; i < this.selectedShape.lons.length; i++) {
-        const point = this.map.project([
-          this.selectedShape.lons[i],
-          this.selectedShape.lats[i],
-        ]);
-        points.push([point.x * dpr, point.y * dpr]);
-      }
-      pushPolyline(shapeVertices, points, dpr);
-      const shapeVertexCount = shapeVertices.length / FLOATS_PER_VERTEX;
-      if (shapeVertexCount > 0) {
-        gl.bufferData(
-          gl.ARRAY_BUFFER,
-          new Float32Array(shapeVertices),
-          gl.DYNAMIC_DRAW,
-        );
-        gl.uniform1f(this.uWidth, 3 * dpr);
-        gl.uniform4f(this.uColor, 0, 0, 0, 1);
-        gl.drawArrays(gl.TRIANGLES, 0, shapeVertexCount);
-      }
+    gl.disableVertexAttribArray(this.aPos0);
+    gl.disableVertexAttribArray(this.aDistance);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  /** Draw the selected route between unselected and highlighted markers. */
+  renderSelectedShape(gl: GL) {
+    if (!this.program || !this.buffer || !this.map || !this.selectedShape) {
+      return;
     }
 
+    const dpr = getMapDpr();
+    const vertices: number[] = [];
+    const points: Point[] = [];
+    for (let i = 0; i < this.selectedShape.lons.length; i++) {
+      const point = this.map.project([
+        this.selectedShape.lons[i],
+        this.selectedShape.lats[i],
+      ]);
+      points.push([point.x * dpr, point.y * dpr]);
+    }
+    pushPolyline(vertices, points, dpr);
+
+    const vertexCount = vertices.length / FLOATS_PER_VERTEX;
+    if (vertexCount === 0) return;
+
+    const canvas = gl.canvas as HTMLCanvasElement;
+    const stride = FLOATS_PER_VERTEX * 4;
+    gl.useProgram(this.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(this.aPos0);
+    gl.vertexAttribPointer(this.aPos0, 2, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(this.aDistance);
+    gl.vertexAttribPointer(this.aDistance, 1, gl.FLOAT, false, stride, 2 * 4);
+    gl.uniform2f(this.uViewport, canvas.width, canvas.height);
+    gl.uniform1f(this.uWidth, 3 * dpr);
+    gl.uniform4f(this.uColor, 0, 0, 0, 1);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
     gl.disableVertexAttribArray(this.aPos0);
     gl.disableVertexAttribArray(this.aDistance);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
