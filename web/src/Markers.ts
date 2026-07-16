@@ -1,7 +1,5 @@
 // The marker image cache.
 
-import maplibregl from "maplibre-gl";
-
 type MarkerKey = string;
 
 // A class used for the click event, to determine whether a marker is opaque

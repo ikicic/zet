@@ -22,13 +22,11 @@ import {
   FilterState,
 } from "./Filter";
 import { InfoControl, InfoOverlay } from "./Info";
-import { MarkerManager } from "./Markers";
 import "./Map.css";
 import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
-import { getUrl, getHttpUrl } from "./url";
+import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
-import { TrajectoryLayer } from "./TrajectoryLayer";
 
 const PERFORMANCE_MODE =
   new URLSearchParams(window.location.search).get("perf") === "1";
@@ -109,9 +107,7 @@ export function Map() {
   const filterStateRef = useRef<FilterState>(filterState);
   const anyMarkerVisibleRef = useRef<boolean>(true);
 
-  const markerManager = useRef<MarkerManager>(new MarkerManager());
   const vehicleLayerRef = useRef<VehicleLayer | null>(null);
-  const trajectoryLayerRef = useRef<TrajectoryLayer | null>(null);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
   const [loadedBigStaticData, setLoadedBigStaticData] =
@@ -126,6 +122,11 @@ export function Map() {
   );
   const filterControlRef = useRef<FilterControl | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<number | null>(null);
+  const [initialAtlasBuildMs, setInitialAtlasBuildMs] = useState<number | null>(
+    null,
+  );
+  const [mapCanvasDpr, setMapCanvasDpr] = useState<number | null>(null);
+  const [perfMap, setPerfMap] = useState<maplibregl.Map | null>(null);
 
   const redraw = () => {
     if (
@@ -151,12 +152,6 @@ export function Map() {
         selectedShapeRef.current,
       );
     }
-
-    trajectoryLayerRef.current?.setData(
-      realTimeData.current.vehicles,
-      activeSelection,
-      highlightedRouteId,
-    );
 
     // Determine if any markers are visible for the filter control
     const anyVisible = realTimeData.current.vehicles.some((v) => {
@@ -223,7 +218,14 @@ export function Map() {
       rollEnabled: false,
       boxZoom: false,
     }));
+    if (PERFORMANCE_MODE) {
+      setPerfMap(map);
+    }
+    const updateMapCanvasDpr = () => setMapCanvasDpr(getMapCanvasDpr(map));
     map.touchZoomRotate.disableRotation();
+    if (PERFORMANCE_MODE) {
+      map.on("resize", updateMapCanvasDpr);
+    }
 
     map.addControl(
       new maplibregl.GeolocateControl({
@@ -235,6 +237,52 @@ export function Map() {
     );
 
     map.addControl(new InfoControl(() => setShowInfo(true)));
+    if (__DEV__) {
+      map.addControl(
+        {
+          onAdd() {
+            const container = document.createElement("div");
+            container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "maplibregl-ctrl-icon";
+            button.textContent = "A";
+            button.title = "Open marker atlas";
+            button.setAttribute("aria-label", button.title);
+            button.addEventListener("click", () =>
+              vehicleLayerRef.current?.openAtlasDebugOverlay(),
+            );
+            container.appendChild(button);
+            return container;
+          },
+          onRemove() {},
+        },
+        "top-right",
+      );
+      map.addControl(
+        {
+          onAdd() {
+            const container = document.createElement("div");
+            container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "maplibregl-ctrl-icon";
+            button.textContent = "L";
+            button.title = "Add dynamic atlas test labels";
+            button.setAttribute("aria-label", button.title);
+            button.addEventListener("click", () =>
+              vehicleLayerRef.current?.addDebugLabels(),
+            );
+            container.appendChild(button);
+            return container;
+          },
+          onRemove() {},
+        },
+        "top-right",
+      );
+    }
     filterControlRef.current = new FilterControl({
       onShowFilter: () => setShowFilter(true),
       onToggleFilter: (enabled: boolean) => {
@@ -252,6 +300,9 @@ export function Map() {
     map.on("load", () => {
       if (!map) {
         return;
+      }
+      if (PERFORMANCE_MODE) {
+        updateMapCanvasDpr();
       }
 
       const emptyGeoJSON: maplibregl.GeoJSONSourceSpecification = {
@@ -293,10 +344,7 @@ export function Map() {
         },
       });
 
-      trajectoryLayerRef.current = new TrajectoryLayer();
-      map.addLayer(trajectoryLayerRef.current);
-
-      vehicleLayerRef.current = new VehicleLayer(map, markerManager.current, {
+      const vehicleLayer = new VehicleLayer(map, {
         onVehicleClick: (vehicle) => {
           setSelectedShapeId(vehicle.shapeId);
           highlightedVehicleCriterion.current.setSelectedRouteId(
@@ -314,7 +362,12 @@ export function Map() {
           setSelectedShape(null);
           redraw();
         },
+        measureInitialAtlasBuild: PERFORMANCE_MODE,
       });
+      vehicleLayerRef.current = vehicleLayer;
+      if (PERFORMANCE_MODE) {
+        setInitialAtlasBuildMs(vehicleLayer.initialAtlasBuildMs);
+      }
 
       mapLoadedRef.current = true;
 
@@ -328,6 +381,9 @@ export function Map() {
     return () => {
       if (vehicleLayerRef.current) {
         vehicleLayerRef.current.destroy();
+      }
+      if (PERFORMANCE_MODE) {
+        map.off("resize", updateMapCanvasDpr);
       }
       map.remove();
     };
@@ -456,7 +512,13 @@ export function Map() {
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
         <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
         <StaleDataIndicator lastUpdateTime={lastUpdateTime} />
-        {PERFORMANCE_MODE && <PerfOverlay />}
+        {PERFORMANCE_MODE && (
+          <PerfOverlay
+            map={perfMap}
+            initialAtlasBuildMs={initialAtlasBuildMs}
+            mapCanvasDpr={mapCanvasDpr}
+          />
+        )}
       </div>
       {showInfo && <InfoOverlay onClose={() => setShowInfo(false)} />}
       {showFilter && (

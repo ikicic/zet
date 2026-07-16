@@ -1,5 +1,6 @@
 import maplibregl from "maplibre-gl";
-import { RouteId, Vehicle } from "./Data";
+import { RouteId, Vehicle, Shape } from "./Data";
+import { getMapDpr } from "./url";
 
 type GL = WebGLRenderingContext | WebGL2RenderingContext;
 
@@ -401,6 +402,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
   private vehicles: Vehicle[] = [];
   private filterSelection: Set<RouteId> = new Set();
   private highlightedRouteId: RouteId | null = null;
+  private selectedShape: Shape | null = null;
 
   onAdd(map: maplibregl.Map, gl: GL) {
     this.map = map;
@@ -436,23 +438,22 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     vehicles: Vehicle[],
     filterSelection: Set<RouteId>,
     highlightedRouteId: RouteId | null,
+    selectedShape: Shape | null = null,
   ) {
     this.vehicles = vehicles;
     this.filterSelection = filterSelection;
     this.highlightedRouteId = highlightedRouteId;
+    this.selectedShape = selectedShape;
     this.map?.triggerRepaint();
   }
 
   render(gl: GL, _options: maplibregl.CustomRenderMethodInput) {
-    if (!this.program || !this.buffer) {
+    if (!this.program || !this.buffer || !this.map) {
       return;
     }
     this.rebuildBuffer();
-    if (this.vertexCount === 0) {
-      return;
-    }
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = getMapDpr();
     const canvas = gl.canvas as HTMLCanvasElement;
     const stride = FLOATS_PER_VERTEX * 4;
 
@@ -465,13 +466,39 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     gl.vertexAttribPointer(this.aDistance, 1, gl.FLOAT, false, stride, 2 * 4);
 
     gl.uniform2f(this.uViewport, canvas.width, canvas.height);
-    gl.uniform1f(this.uWidth, 2 * dpr);
-    gl.uniform4f(this.uColor, 1, 100 / 255, 100 / 255, 0.7);
-
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.DEPTH_TEST);
-    gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+
+    if (this.vertexCount > 0) {
+      gl.uniform1f(this.uWidth, 2 * dpr);
+      gl.uniform4f(this.uColor, 1, 100 / 255, 100 / 255, 0.7);
+      gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+    }
+
+    if (this.selectedShape && this.map) {
+      const shapeVertices: number[] = [];
+      const points: Point[] = [];
+      for (let i = 0; i < this.selectedShape.lons.length; i++) {
+        const point = this.map.project([
+          this.selectedShape.lons[i],
+          this.selectedShape.lats[i],
+        ]);
+        points.push([point.x * dpr, point.y * dpr]);
+      }
+      pushPolyline(shapeVertices, points, dpr);
+      const shapeVertexCount = shapeVertices.length / FLOATS_PER_VERTEX;
+      if (shapeVertexCount > 0) {
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(shapeVertices),
+          gl.DYNAMIC_DRAW,
+        );
+        gl.uniform1f(this.uWidth, 3 * dpr);
+        gl.uniform4f(this.uColor, 0, 0, 0, 1);
+        gl.drawArrays(gl.TRIANGLES, 0, shapeVertexCount);
+      }
+    }
 
     gl.disableVertexAttribArray(this.aPos0);
     gl.disableVertexAttribArray(this.aDistance);
@@ -483,7 +510,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
       return;
     }
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = getMapDpr();
     const vertices: number[] = [];
     for (const vehicle of this.vehicles) {
       const highlighted =

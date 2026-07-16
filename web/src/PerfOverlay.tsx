@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type maplibregl from "maplibre-gl";
 import "./PerfOverlay.css";
 
 interface PerfStats {
@@ -19,19 +20,35 @@ function formatMs(value: number) {
   return `${value.toFixed(1)} ms`;
 }
 
-export function PerfOverlay() {
+export function PerfOverlay({
+  map,
+  initialAtlasBuildMs,
+  mapCanvasDpr,
+}: {
+  map: maplibregl.Map | null;
+  initialAtlasBuildMs: number | null;
+  mapCanvasDpr: number | null;
+}) {
   const [stats, setStats] = useState<PerfStats>(INITIAL_STATS);
 
   useEffect(() => {
-    let animationFrame = 0;
-    let lastFrameTime = performance.now();
-    let sampleStart = lastFrameTime;
+    if (!map) return;
+
+    let lastFrameTime: number | null = null;
+    let sampleStart = performance.now();
     let frames = 0;
     let totalFrameMs = 0;
     let worstFrameMs = 0;
     let longFrames = 0;
 
-    const measure = (time: number) => {
+    const measure = () => {
+      const time = performance.now();
+      if (lastFrameTime === null) {
+        lastFrameTime = time;
+        frames += 1;
+        return;
+      }
+
       const frameMs = time - lastFrameTime;
       lastFrameTime = time;
       frames += 1;
@@ -40,28 +57,31 @@ export function PerfOverlay() {
       if (frameMs > 50) {
         longFrames += 1;
       }
-
-      const elapsed = time - sampleStart;
-      if (elapsed >= 1000) {
-        setStats({
-          fps: (frames * 1000) / elapsed,
-          avgFrameMs: totalFrameMs / frames,
-          worstFrameMs,
-          longFrames,
-        });
-        sampleStart = time;
-        frames = 0;
-        totalFrameMs = 0;
-        worstFrameMs = 0;
-        longFrames = 0;
-      }
-
-      animationFrame = requestAnimationFrame(measure);
     };
 
-    animationFrame = requestAnimationFrame(measure);
-    return () => cancelAnimationFrame(animationFrame);
-  }, []);
+    map.on("render", measure);
+    const interval = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = now - sampleStart;
+      setStats({
+        fps: (frames * 1000) / elapsed,
+        avgFrameMs: frames > 1 ? totalFrameMs / (frames - 1) : 0,
+        worstFrameMs,
+        longFrames,
+      });
+      sampleStart = now;
+      frames = 0;
+      totalFrameMs = 0;
+      worstFrameMs = 0;
+      longFrames = 0;
+      lastFrameTime = null;
+    }, 1000);
+
+    return () => {
+      map.off("render", measure);
+      clearInterval(interval);
+    };
+  }, [map]);
 
   return (
     <div className="perf-overlay">
@@ -80,6 +100,20 @@ export function PerfOverlay() {
       <div className="perf-overlay-row">
         <span className="perf-overlay-label">Long</span>
         <span>{stats.longFrames}/s</span>
+      </div>
+      <div className="perf-overlay-row">
+        <span className="perf-overlay-label">Atlas</span>
+        <span>
+          {initialAtlasBuildMs === null ? "—" : formatMs(initialAtlasBuildMs)}
+        </span>
+      </div>
+      <div className="perf-overlay-row">
+        <span className="perf-overlay-label">DPR window</span>
+        <span>{window.devicePixelRatio || 1}</span>
+      </div>
+      <div className="perf-overlay-row">
+        <span className="perf-overlay-label">DPR map</span>
+        <span>{mapCanvasDpr === null ? "—" : mapCanvasDpr}</span>
       </div>
     </div>
   );

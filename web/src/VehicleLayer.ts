@@ -1,17 +1,27 @@
 import maplibregl from "maplibre-gl";
 import { Vehicle, RouteId, Shape } from "./Data";
-import { MarkerManager, MarkerProperties, Marker } from "./Markers";
+import {
+  MarkerAtlas,
+  computeAtlasDimensions,
+  getShapeHitDimensions,
+  openAtlasDebugOverlay,
+} from "./MarkerAtlas";
+import { WebGLMarkerRenderer } from "./WebGLMarkerRenderer";
+import { TrajectoryLayer } from "./TrajectoryLayer";
+import { getMapDpr } from "./url";
 
 export interface VehicleLayerOptions {
   onVehicleClick: (vehicle: Vehicle) => void;
   onNothingClick: () => void;
+  measureInitialAtlasBuild?: boolean;
 }
 
-interface RenderedMarker {
+interface RenderedVehicle {
   vehicle: Vehicle;
   x: number;
   y: number;
-  marker: Marker;
+  shapeHalfW: number;
+  shapeHalfH: number;
 }
 
 interface LastState {
@@ -28,68 +38,100 @@ interface LastState {
   selectedShape: Shape | null;
 }
 
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  let r1: number, g1: number, b1: number;
+  if (h >= 0 && h < 60) {
+    [r1, g1, b1] = [c, x, 0];
+  } else if (h >= 60 && h < 120) {
+    [r1, g1, b1] = [x, c, 0];
+  } else if (h >= 120 && h < 180) {
+    [r1, g1, b1] = [0, c, x];
+  } else if (h >= 180 && h < 240) {
+    [r1, g1, b1] = [0, x, c];
+  } else if (h >= 240 && h < 300) {
+    [r1, g1, b1] = [x, 0, c];
+  } else {
+    [r1, g1, b1] = [c, 0, x];
+  }
+
+  return [r1 + m, g1 + m, b1 + m];
+}
+
+const TRAM_COLOR = hslToRgb(207, 0.9, 0.54);
+const HIGHLIGHTED_TRAM_COLOR = hslToRgb(7, 0.898, 0.539);
+const BUS_COLOR = hslToRgb(212, 0.8, 0.42);
+const HIGHLIGHTED_BUS_COLOR = hslToRgb(12, 0.804, 0.42);
+
 export class VehicleLayer {
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
+  private _atlas: MarkerAtlas | null = null;
+  private atlasDpr = 0;
+  private markerLayer: WebGLMarkerRenderer;
+  private trajectoryLayer: TrajectoryLayer;
   private map: maplibregl.Map;
-  private markerManager: MarkerManager;
+  private options: VehicleLayerOptions;
+  private measureInitialAtlasBuild: boolean;
 
   private vehicles: Vehicle[] = [];
   private filterSelection: Set<RouteId> = new Set();
   private highlightedRouteId: RouteId | null = null;
   private selectedShape: Shape | null = null;
+  private debugLabels: string[] = [];
 
-  private options: VehicleLayerOptions;
-
-  // For click handling.
-  private lastRenderedMarkers: Array<RenderedMarker> = [];
-
-  // For skipping renders if nothing has changed, since Maplibre may call render
-  // multiple times to handle fade in/out animation.
+  private lastRendered: RenderedVehicle[] = [];
   private lastState: LastState | null = null;
+  private _initialAtlasBuildMs: number | null = null;
+  private readonly onResize = () => this.ensureAtlas();
 
-  constructor(
-    map: maplibregl.Map,
-    markerManager: MarkerManager,
-    options: VehicleLayerOptions,
-  ) {
+  get initialAtlasBuildMs(): number | null {
+    return this._initialAtlasBuildMs;
+  }
+
+  get atlas(): MarkerAtlas {
+    if (!this._atlas) {
+      throw new Error("Marker atlas not initialized");
+    }
+    return this._atlas;
+  }
+
+  constructor(map: maplibregl.Map, options: VehicleLayerOptions) {
     this.map = map;
-    this.markerManager = markerManager;
     this.options = options;
+    this.measureInitialAtlasBuild = options.measureInitialAtlasBuild === true;
 
-    this.canvas = document.createElement("canvas");
-    this.canvas.style.position = "absolute";
-    this.canvas.style.top = "0";
-    this.canvas.style.left = "0";
-    this.canvas.style.pointerEvents = "none"; // Clicks are handled via map listener
-    this.canvas.style.width = "100%";
-    this.canvas.style.height = "100%";
+    this.trajectoryLayer = new TrajectoryLayer();
+    this.markerLayer = new WebGLMarkerRenderer();
+    this.markerLayer.setFrameBuilder(() => this.buildMarkers());
 
-    map.getContainer().appendChild(this.canvas);
-    this.ctx = this.canvas.getContext("2d")!;
+    map.addLayer(this.trajectoryLayer);
+    map.addLayer(this.markerLayer);
 
-    this.handleResize = this.handleResize.bind(this);
-    this.render = this.render.bind(this);
+    this.ensureAtlas();
+    map.on("resize", this.onResize);
+
     this.handleClick = this.handleClick.bind(this);
     this.handleMouseMove = this.handleMouseMove.bind(this);
 
-    map.on("resize", this.handleResize);
-    map.on("render", this.render);
     map.on("click", this.handleClick);
     map.on("mousemove", this.handleMouseMove);
-
-    this.handleResize();
   }
 
-  public destroy() {
-    this.map.off("resize", this.handleResize);
-    this.map.off("render", this.render);
+  destroy() {
+    this.map.off("resize", this.onResize);
     this.map.off("click", this.handleClick);
     this.map.off("mousemove", this.handleMouseMove);
-    this.canvas.remove();
+    if (this.map.getLayer(this.markerLayer.id)) {
+      this.map.removeLayer(this.markerLayer.id);
+    }
+    if (this.map.getLayer(this.trajectoryLayer.id)) {
+      this.map.removeLayer(this.trajectoryLayer.id);
+    }
   }
 
-  public setData(
+  setData(
     vehicles: Vehicle[],
     filterSelection: Set<RouteId>,
     highlightedRouteId: RouteId | null,
@@ -99,62 +141,89 @@ export class VehicleLayer {
     this.filterSelection = filterSelection;
     this.highlightedRouteId = highlightedRouteId;
     this.selectedShape = selectedShape;
-    this.render();
+
+    this.trajectoryLayer.setData(
+      vehicles,
+      filterSelection,
+      highlightedRouteId,
+      selectedShape,
+    );
+    this.map.triggerRepaint();
   }
 
-  private handleResize() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = this.map.getContainer().getBoundingClientRect();
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
-    this.render();
-  }
-
-  private handleClick(e: maplibregl.MapMouseEvent) {
-    const mouseX = e.point.x;
-    const mouseY = e.point.y;
-
-    // Search from top to bottom (last rendered is on top)
-    for (let i = this.lastRenderedMarkers.length - 1; i >= 0; i--) {
-      const entry = this.lastRenderedMarkers[i];
-      const dx = mouseX - entry.x;
-      const dy = mouseY - entry.y;
-
-      if (entry.marker.shape.isWithinShape(dx, dy)) {
-        this.options.onVehicleClick(entry.vehicle);
-        return;
-      }
+  openAtlasDebugOverlay() {
+    if (this._atlas) {
+      openAtlasDebugOverlay(this._atlas);
     }
-    this.options.onNothingClick();
   }
 
-  private handleMouseMove(e: maplibregl.MapMouseEvent) {
-    const mouseX = e.point.x;
-    const mouseY = e.point.y;
+  /** Add synthetic labels to exercise incremental atlas uploads in development. */
+  addDebugLabels() {
+    if (!__DEV__) return;
 
-    for (let i = this.lastRenderedMarkers.length - 1; i >= 0; i--) {
-      const entry = this.lastRenderedMarkers[i];
-      if (
-        entry.marker.shape.isWithinShape(mouseX - entry.x, mouseY - entry.y)
-      ) {
-        this.map.getCanvas().style.cursor = "pointer";
-        return;
-      }
+    const start = this.debugLabels.length;
+    for (let i = 0; i < 6; i++) {
+      this.debugLabels.push(
+        `X${((start + i) % 100).toString().padStart(2, "0")}`,
+      );
     }
-    this.map.getCanvas().style.cursor = "";
+    this.lastState = null;
+    this.map.triggerRepaint();
   }
 
-  private render() {
-    if (!this.ctx || !this.map) return;
+  /** (Re)build the atlas when the map's pixel ratio is known or changes. */
+  private ensureAtlas() {
+    const dpr = getMapDpr();
+    if (this._atlas && this.atlasDpr === dpr) {
+      return;
+    }
+
+    const { width: atlasWidth, height: atlasHeight } =
+      computeAtlasDimensions(dpr);
+    const atlasStart = this.measureInitialAtlasBuild ? performance.now() : 0;
+    this._atlas = new MarkerAtlas(atlasWidth, atlasHeight, dpr);
+    if (this.measureInitialAtlasBuild && this._initialAtlasBuildMs === null) {
+      this._initialAtlasBuildMs = performance.now() - atlasStart;
+    }
+    this.atlasDpr = dpr;
+    this.markerLayer.setAtlas(this._atlas);
+    this.lastState = null;
+  }
+
+  private getBaseColor(
+    vehicle: Vehicle,
+    isHighlighted: boolean,
+  ): [number, number, number] {
+    const isTram = vehicle.routeId.toString().length < 3;
+    return isHighlighted
+      ? isTram
+        ? HIGHLIGHTED_TRAM_COLOR
+        : HIGHLIGHTED_BUS_COLOR
+      : isTram
+        ? TRAM_COLOR
+        : BUS_COLOR;
+  }
+
+  private getVehicleColor(
+    vehicle: Vehicle,
+    isHighlighted: boolean,
+  ): [number, number, number, number] {
+    const base = this.getBaseColor(vehicle, isHighlighted);
+    return [base[0], base[1], base[2], 1.0];
+  }
+
+  /** Rebuild marker instances using the map transform for this frame. */
+  private buildMarkers() {
+    this.ensureAtlas();
 
     const center = this.map.getCenter();
     const zoom = this.map.getZoom();
     const bearing = this.map.getBearing();
     const pitch = this.map.getPitch();
-    const width = this.canvas.width;
-    const height = this.canvas.height;
+    const canvas = this.map.getCanvas();
+    const width = canvas.width;
+    const height = canvas.height;
 
-    // Skip render if nothing has changed (camera or data)
     if (
       this.lastState &&
       this.lastState.lng === center.lng &&
@@ -186,124 +255,127 @@ export class VehicleLayer {
       selectedShape: this.selectedShape,
     };
 
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.lastRenderedMarkers = [];
+    const dpr = getMapDpr();
+    const unselected: Vehicle[] = [];
+    const highlighted: Vehicle[] = [];
 
-    const unselectedVehicles: Vehicle[] = [];
-    const highlightedVehicles: Vehicle[] = [];
     for (const vehicle of this.vehicles) {
-      const highlighted =
+      const isHighlighted =
         this.highlightedRouteId !== null &&
         vehicle.routeId === this.highlightedRouteId;
       const hidden =
         this.filterSelection.size > 0 &&
         !this.filterSelection.has(vehicle.routeId);
+      if (hidden && !isHighlighted) continue;
 
-      if (hidden && !highlighted) continue;
-
-      if (highlighted) {
-        highlightedVehicles.push(vehicle);
+      if (isHighlighted) {
+        highlighted.push(vehicle);
       } else {
-        unselectedVehicles.push(vehicle);
+        unselected.push(vehicle);
       }
     }
 
-    // Sort by label (smaller number is on top)
-    unselectedVehicles.sort((a, b) => b.routeId - a.routeId);
-    highlightedVehicles.sort((a, b) => b.routeId - a.routeId);
+    unselected.sort((a, b) => b.routeId - a.routeId);
+    highlighted.sort((a, b) => b.routeId - a.routeId);
 
-    // 1. Draw unselected vehicles
-    for (const vehicle of unselectedVehicles) {
-      this.drawVehicle(vehicle, false);
-    }
+    this.markerLayer.beginFrame(
+      2 * (unselected.length + highlighted.length + this.debugLabels.length),
+    );
+    this.lastRendered = [];
 
-    // 2. Draw selected route line
-    if (this.selectedShape) {
-      this.drawSelectedShape();
-    }
+    const addVehicle = (vehicle: Vehicle, isHighlighted: boolean) => {
+      const lon = vehicle.lon[vehicle.lon.length - 1];
+      const lat = vehicle.lat[vehicle.lat.length - 1];
+      const pixel = this.map.project([lon, lat]);
 
-    // 3. Draw highlighted vehicles
-    for (const vehicle of highlightedVehicles) {
-      this.drawVehicle(vehicle, true);
-    }
-  }
-
-  private drawSelectedShape() {
-    if (!this.selectedShape) return;
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = this.ctx;
-    const shape = this.selectedShape;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 3 * dpr;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    let first = true;
-    for (let i = 0; i < shape.lons.length; ++i) {
-      const pixel = this.map.project([shape.lons[i], shape.lats[i]]);
-      if (first) {
-        ctx.moveTo(pixel.x * dpr, pixel.y * dpr);
-        first = false;
-      } else {
-        ctx.lineTo(pixel.x * dpr, pixel.y * dpr);
+      if (
+        pixel.x < -100 ||
+        pixel.x > width / dpr + 100 ||
+        pixel.y < -100 ||
+        pixel.y > height / dpr + 100
+      ) {
+        return;
       }
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
 
-  private drawVehicle(vehicle: Vehicle, highlighted: boolean) {
-    const dpr = window.devicePixelRatio || 1;
-    const lon = vehicle.lon[vehicle.lon.length - 1];
-    const lat = vehicle.lat[vehicle.lat.length - 1];
+      const label = vehicle.routeId.toString();
+      const labelLength = label.length;
+      const deg = vehicle.directionDegrees ?? null;
 
-    const pixel = this.map.project([lon, lat]);
+      const shapeEntry = this.atlas.getShape(labelLength, deg, isHighlighted);
+      const labelEntry = this.atlas.getOrCreateLabel(label);
 
-    // Basic culling: skip if significantly outside the viewport
-    if (
-      pixel.x < -100 ||
-      pixel.x > this.canvas.width / dpr + 100 ||
-      pixel.y < -100 ||
-      pixel.y > this.canvas.height / dpr + 100
-    ) {
-      return;
-    }
+      const sx = pixel.x * dpr;
+      const sy = pixel.y * dpr;
+      const vehicleColor = this.getVehicleColor(vehicle, isHighlighted);
 
-    // Round the angle just like in the original code for better caching
-    let deg = null;
-    if (vehicle.directionDegrees != null) {
-      deg = Math.round(vehicle.directionDegrees / 12) * 12;
-    }
+      // The icon is tinted, then the white route label is composited on top.
+      this.markerLayer.addInstance(sx, sy, shapeEntry, vehicleColor);
+      this.markerLayer.addInstance(sx, sy, labelEntry, [1, 1, 1, 1]);
 
-    const markerProperties: MarkerProperties = {
-      label: vehicle.routeId.toString(),
-      directionDegrees: deg,
-      highlighted: highlighted,
+      const { rx, ry } = getShapeHitDimensions(labelLength);
+      this.lastRendered.push({
+        vehicle,
+        x: pixel.x,
+        y: pixel.y,
+        shapeHalfW: rx,
+        shapeHalfH: ry,
+      });
     };
 
-    const marker = this.markerManager.getOrCreate(markerProperties);
+    for (const vehicle of unselected) {
+      addVehicle(vehicle, false);
+    }
+    for (const vehicle of highlighted) {
+      addVehicle(vehicle, true);
+    }
 
-    const sprite = marker.image;
-    const sw = sprite.width;
-    const sh = sprite.height;
+    for (let i = 0; i < this.debugLabels.length; i++) {
+      const label = this.debugLabels[i];
+      const x = width / dpr / 2 + (i % 3) * 64 - 64;
+      const y = height / dpr / 2 + Math.floor(i / 3) * 52 - 26;
+      const shapeEntry = this.atlas.getShape(3, null, false);
+      const labelEntry = this.atlas.getOrCreateLabel(label);
+      this.markerLayer.addInstance(x * dpr, y * dpr, shapeEntry, [
+        ...BUS_COLOR,
+        1,
+      ]);
+      this.markerLayer.addInstance(x * dpr, y * dpr, labelEntry, [1, 1, 1, 1]);
+    }
+  }
 
-    // Draw centered on the projected point
-    this.ctx.drawImage(
-      sprite,
-      pixel.x * dpr - sw / 2,
-      pixel.y * dpr - sh / 2,
-      sw,
-      sh,
-    );
+  private handleClick(e: maplibregl.MapMouseEvent) {
+    const mouseX = e.point.x;
+    const mouseY = e.point.y;
 
-    this.lastRenderedMarkers.push({
-      vehicle,
-      x: pixel.x,
-      y: pixel.y,
-      marker,
-    });
+    for (let i = this.lastRendered.length - 1; i >= 0; i--) {
+      const entry = this.lastRendered[i];
+      const dx = mouseX - entry.x;
+      const dy = mouseY - entry.y;
+      const rx2 = entry.shapeHalfW * entry.shapeHalfW;
+      const ry2 = entry.shapeHalfH * entry.shapeHalfH;
+      if (dx * dx * ry2 + dy * dy * rx2 <= rx2 * ry2) {
+        this.options.onVehicleClick(entry.vehicle);
+        return;
+      }
+    }
+    this.options.onNothingClick();
+  }
+
+  private handleMouseMove(e: maplibregl.MapMouseEvent) {
+    const mouseX = e.point.x;
+    const mouseY = e.point.y;
+
+    for (let i = this.lastRendered.length - 1; i >= 0; i--) {
+      const entry = this.lastRendered[i];
+      const dx = mouseX - entry.x;
+      const dy = mouseY - entry.y;
+      const rx2 = entry.shapeHalfW * entry.shapeHalfW;
+      const ry2 = entry.shapeHalfH * entry.shapeHalfH;
+      if (dx * dx * ry2 + dy * dy * rx2 <= rx2 * ry2) {
+        this.map.getCanvas().style.cursor = "pointer";
+        return;
+      }
+    }
+    this.map.getCanvas().style.cursor = "";
   }
 }
