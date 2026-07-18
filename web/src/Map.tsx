@@ -28,16 +28,16 @@ import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
 import {
-  getNewsBadge,
-  deserializeNewsSnapshot,
-  deserializeSeenNews,
+  deserializeSeenNewsVersion,
+  hasUnseenNews,
   isNewsSnapshot,
-  markNewsSeen,
+  isNewsStatus,
   NewsControl,
   NewsOverlay,
-  NEWS_SEEN_KEY,
-  NEWS_SNAPSHOT_KEY,
   NewsSnapshot,
+  NewsStatus,
+  NEWS_SEEN_VERSION_KEY,
+  removeLegacyNewsStorage,
 } from "./News";
 import { useLocalStorage } from "./useLocalStorage";
 
@@ -140,33 +140,68 @@ export function Map() {
   );
   const [mapCanvasDpr, setMapCanvasDpr] = useState<number | null>(null);
   const [perfMap, setPerfMap] = useState<maplibregl.Map | null>(null);
-  const [news, setNews] = useLocalStorage<NewsSnapshot | null>(
-    NEWS_SNAPSHOT_KEY,
+  const [news, setNews] = useState<NewsSnapshot | null>(null);
+  const [newsStatus, setNewsStatus] = useState<NewsStatus | null>(null);
+  const [seenNewsVersion, setSeenNewsVersion] = useLocalStorage<string | null>(
+    NEWS_SEEN_VERSION_KEY,
     null,
-    { deserialize: deserializeNewsSnapshot },
+    {
+      deserialize: deserializeSeenNewsVersion,
+    },
   );
-  const [seenNews, setSeenNews] = useLocalStorage<Record<
-    string,
-    number
-  > | null>(NEWS_SEEN_KEY, null, { deserialize: deserializeSeenNews });
   const [showNews, setShowNews] = useState(false);
   const newsRef = useRef<NewsSnapshot | null>(news);
-  const seenNewsRef = useRef(seenNews);
+  const newsStatusRef = useRef<NewsStatus | null>(newsStatus);
+  const seenNewsVersionRef = useRef(seenNewsVersion);
   const newsControlRef = useRef<NewsControl | null>(null);
+  const newsFetchRef = useRef<Promise<void> | null>(null);
+
+  const loadNews = () => {
+    if (
+      newsRef.current != null &&
+      newsRef.current.version === newsStatusRef.current?.version
+    ) {
+      return;
+    }
+    if (newsFetchRef.current != null) return;
+
+    const fetchNews = async () => {
+      try {
+        const response = await fetch(getHttpUrl("news"), {
+          cache: "no-cache",
+        });
+        if (response.status === 204) {
+          newsRef.current = null;
+          setNews(null);
+          return;
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const snapshot: unknown = await response.json();
+        if (!isNewsSnapshot(snapshot)) {
+          throw new Error("Invalid news snapshot");
+        }
+        newsRef.current = snapshot;
+        setNews(snapshot);
+        seenNewsVersionRef.current = snapshot.version;
+        setSeenNewsVersion(snapshot.version);
+      } catch (error) {
+        console.error("Could not load news:", error);
+      } finally {
+        newsFetchRef.current = null;
+      }
+    };
+    newsFetchRef.current = fetchNews();
+  };
 
   const openNews = () => {
-    const currentNews = newsRef.current;
-    if (currentNews) {
-      const updatedSeen = markNewsSeen(
-        seenNewsRef.current ?? {},
-        currentNews.items,
-      );
-      seenNewsRef.current = updatedSeen;
-      setSeenNews(updatedSeen);
-    }
     setShowNews(true);
+    loadNews();
   };
   const closeNews = useCallback(() => setShowNews(false), []);
+
+  useEffect(() => {
+    removeLegacyNewsStorage();
+  }, []);
 
   const redraw = () => {
     if (
@@ -281,7 +316,7 @@ export function Map() {
     newsControlRef.current = newsControl;
     map.addControl(newsControl, "top-right");
     newsControl.setBadge(
-      getNewsBadge(newsRef.current?.items, seenNewsRef.current ?? {}),
+      hasUnseenNews(newsStatusRef.current, seenNewsVersionRef.current),
     );
     if (__DEV__) {
       map.addControl(
@@ -478,9 +513,7 @@ export function Map() {
         return;
       }
 
-      // Manually change to the dev websocket server port in http.
       const url = new URL(getUrl("ws", "wss", "ws-v3"));
-      url.searchParams.set("last_news_version", newsRef.current?.version ?? "");
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => {
@@ -490,24 +523,13 @@ export function Map() {
 
       ws.addEventListener("message", (event) => {
         const data = JSON.parse(event.data);
-        const isNewsMessage =
-          typeof data === "object" &&
-          data != null &&
-          !Array.isArray(data) &&
-          data.type === "news";
-        if (isNewsMessage) {
-          if (!isNewsSnapshot(data)) {
-            console.warn("Ignoring invalid news snapshot");
-            return;
+        if (isNewsStatus(data)) {
+          if (seenNewsVersionRef.current === null) {
+            seenNewsVersionRef.current = data.version;
+            setSeenNewsVersion(data.version);
           }
-          const snapshot = data;
-          if (seenNewsRef.current === null) {
-            const updatedSeen = markNewsSeen({}, snapshot.items);
-            seenNewsRef.current = updatedSeen;
-            setSeenNews(updatedSeen);
-          }
-          newsRef.current = snapshot;
-          setNews(snapshot);
+          newsStatusRef.current = data;
+          setNewsStatus(data);
           return;
         }
         const stateData = data as CompressedRealTimeState;
@@ -559,16 +581,12 @@ export function Map() {
 
   useEffect(() => {
     newsRef.current = news;
-    if (news && seenNews === null) {
-      const updatedSeen = markNewsSeen({}, news.items);
-      seenNewsRef.current = updatedSeen;
-      setSeenNews(updatedSeen);
-      newsControlRef.current?.setBadge(getNewsBadge(news.items, updatedSeen));
-      return;
-    }
-    seenNewsRef.current = seenNews;
-    newsControlRef.current?.setBadge(getNewsBadge(news?.items, seenNews ?? {}));
-  }, [news, seenNews]);
+    newsStatusRef.current = newsStatus;
+    seenNewsVersionRef.current = seenNewsVersion;
+    newsControlRef.current?.setBadge(
+      hasUnseenNews(newsStatus, seenNewsVersion),
+    );
+  }, [newsStatus, seenNewsVersion]);
 
   const onFilterSelectionChange = (newSelection: Set<RouteId>) => {
     const newFilterState = {

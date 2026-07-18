@@ -19,10 +19,13 @@ export interface NewsSnapshot {
   items: NewsItem[];
 }
 
-type NewsBadge = NewsKind | null;
+export interface NewsStatus {
+  version: string;
+  latestAt: number | null;
+}
 
-export const NEWS_SNAPSHOT_KEY = "zet-news-snapshot-v1";
-export const NEWS_SEEN_KEY = "zet-news-seen-v1";
+export const NEWS_SEEN_VERSION_KEY = "zet-news-seen-version-v1";
+const LEGACY_NEWS_STORAGE_KEYS = ["zet-news-snapshot-v1", "zet-news-seen-v1"];
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 const MAX_NEWS_ITEMS = 30;
 const MAX_NEWS_ID_LENGTH = 512;
@@ -130,30 +133,33 @@ export function isNewsSnapshot(value: unknown): value is NewsSnapshot {
   );
 }
 
-export function deserializeNewsSnapshot(value: string): NewsSnapshot | null {
-  const snapshot: unknown = JSON.parse(value);
-  if (!isNewsSnapshot(snapshot)) throw new Error("Invalid saved news snapshot");
-  return snapshot;
+export function isNewsStatus(value: unknown): value is NewsStatus {
+  return (
+    isRecord(value) &&
+    value.type === "news-status" &&
+    typeof value.version === "string" &&
+    /^[0-9a-f]{16}$/.test(value.version) &&
+    (value.latestAt === null || isNewsTimestamp(value.latestAt))
+  );
 }
 
-export function deserializeSeenNews(
-  value: string,
-): Record<string, number> | null {
-  const parsed: unknown = JSON.parse(value);
-  if (parsed === null) return null;
-  if (!isRecord(parsed)) throw new Error("Invalid saved seen-news state");
-  const seen: Record<string, number> = {};
-  for (const [id, seenAt] of Object.entries(parsed)) {
-    if (
-      id.length > 0 &&
-      id.length <= MAX_NEWS_ID_LENGTH &&
-      typeof seenAt === "number" &&
-      Number.isFinite(seenAt)
-    ) {
-      seen[id] = seenAt;
+export function deserializeSeenNewsVersion(value: string): string | null {
+  const version: unknown = JSON.parse(value);
+  if (version === null) return null;
+  if (typeof version !== "string" || !/^[0-9a-f]{16}$/.test(version)) {
+    throw new Error("Invalid saved seen-news version");
+  }
+  return version;
+}
+
+export function removeLegacyNewsStorage(): void {
+  for (const key of LEGACY_NEWS_STORAGE_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Storage can be unavailable in private browsing modes.
     }
   }
-  return seen;
 }
 
 function dayKey(timestamp: number): string {
@@ -181,34 +187,17 @@ function isTodayOrYesterday(timestamp: number): boolean {
   return itemDay === today || itemDay === previousDayKey(today);
 }
 
-export function markNewsSeen(
-  seen: Record<string, number>,
-  items: NewsItem[],
-): Record<string, number> {
-  const updatedSeen = { ...seen };
-  const now = Date.now();
-  for (const item of items) updatedSeen[item.id] = now;
-
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  for (const [id, seenAt] of Object.entries(updatedSeen)) {
-    if (seenAt < cutoff) delete updatedSeen[id];
-  }
-  return updatedSeen;
-}
-
-export function getNewsBadge(
-  items: NewsItem[] | undefined,
-  seen: Record<string, number>,
-): NewsBadge {
-  if (!items) return null;
-  const unseen = items.filter(
-    (item) => !seen[item.id] && isTodayOrYesterday(item.publishedAt),
+export function hasUnseenNews(
+  status: NewsStatus | null,
+  seenVersion: string | null,
+): boolean {
+  return (
+    status != null &&
+    status.latestAt != null &&
+    seenVersion != null &&
+    status.version !== seenVersion &&
+    isTodayOrYesterday(status.latestAt)
   );
-  return unseen.some((item) => item.kind === "traffic")
-    ? "traffic"
-    : unseen.some((item) => item.kind === "news")
-      ? "news"
-      : null;
 }
 
 function formatDate(timestamp: number): string {
@@ -307,10 +296,9 @@ export class NewsControl {
     return container;
   }
 
-  setBadge(badge: NewsBadge) {
+  setBadge(hasUnreadNews: boolean) {
     if (!this.dot) return;
-    this.dot.hidden = badge == null;
-    this.dot.className = `news-control-dot ${badge === "traffic" ? "news-control-dot-traffic" : "news-control-dot-news"}`;
+    this.dot.hidden = !hasUnreadNews;
   }
 
   onRemove() {

@@ -15,7 +15,7 @@ import threading
 import time
 import zipfile
 
-from flask import Flask, request, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from flask_sock import Sock
 from google.protobuf.json_format import MessageToDict
@@ -601,8 +601,8 @@ class GtfsServer:
     def _notify_clients(self, message: WsOutputMessageVariants) -> None:
         self._notify_message(lambda client: message.for_version(client.version))
 
-    def _notify_news_clients(self) -> None:
-        message = self.news_cache.message()
+    def _notify_news_status(self) -> None:
+        message = self.news_cache.status_message()
         if message is None:
             return
         self._notify_message(
@@ -632,7 +632,7 @@ class GtfsServer:
     def update_news_continuously(self) -> None:
         while True:
             if self.news_cache.refresh():
-                self._notify_news_clients()
+                self._notify_news_status()
             time.sleep(NEWS_FETCH_INTERVAL_SECONDS)
 
     def handle_big_static_data_request(self, key: str) -> tuple[str, int]:
@@ -654,7 +654,6 @@ gtfs_server: GtfsServer | None = None
 def handle_websocket(
     ws: simple_websocket.ws.Server,
     version: int,
-    last_news_version: str | None = None,
 ):
     if gtfs_server is None:
         raise Exception("gtfs_server is not initialized")
@@ -667,15 +666,12 @@ def handle_websocket(
         with gtfs_server._send_lock:
             if gtfs_server.latest_message:
                 client.ws.send(gtfs_server.latest_message.for_version(version))
-            if (version >= 3
-                    and last_news_version != gtfs_server.news_cache.version()):
-                news_message = gtfs_server.news_cache.message()
-                if news_message is not None:
-                    client.ws.send(news_message)
+            if version >= 3:
+                news_status = gtfs_server.news_cache.status_message()
+                if news_status is not None:
+                    client.ws.send(news_status)
         while True:
-            # Keep connection alive and wait for any client messages
-            message = ws.receive()
-            # Handle client messages here if needed
+            ws.receive()
     except Exception:
         pass
     finally:
@@ -703,11 +699,25 @@ def websocket_v2(ws: simple_websocket.ws.Server):
 @sock.route('/ws-v3')
 def websocket_v3(ws: simple_websocket.ws.Server):
     """v3 keeps bare realtime messages and adds separate typed messages."""
-    handle_websocket(
-        ws,
-        version=3,
-        last_news_version=request.args.get('last_news_version'),
-    )
+    handle_websocket(ws, version=3)
+
+
+@app.route('/news')
+def news():
+    if gtfs_server is None:
+        raise Exception("gtfs_server is not initialized")
+    snapshot = gtfs_server.news_cache.snapshot()
+    if snapshot is None:
+        return '', 204
+    version, message = snapshot
+    if request.if_none_match.contains(version):
+        response = Response(status=304)
+    else:
+        response = Response(message, mimetype='application/json')
+    response.set_etag(version)
+    # Store the response, but revalidate it whenever the user opens news.
+    response.headers['Cache-Control'] = 'private, no-cache'
+    return response
 
 
 @app.route('/static/<key>')

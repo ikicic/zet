@@ -367,17 +367,24 @@ class NewsCache:
                             len(self._items))
             return changed
 
-    def message(self) -> str | None:
+    def snapshot(self) -> tuple[str, str] | None:
         with self._lock:
             if not self._version:
                 return None
-            return json.dumps({
+            message = json.dumps({
                 'type': 'news',
                 'version': self._version,
                 'fetchedAt': self._fetched_at,
                 'items': [item.to_json() for item in self._items],
             }, separators=(',', ':'))
+            return self._version, message
 
-    def version(self) -> str:
+    def status_message(self) -> str | None:
         with self._lock:
-            return self._version
+            if not self._version:
+                return None
+            return json.dumps({
+                'type': 'news-status',
+                'version': self._version,
+                'latestAt': self._items[0].published_at if self._items else None,
+            }, separators=(',', ':'))

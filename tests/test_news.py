@@ -1,4 +1,5 @@
 from email.message import Message
+import json
 from unittest.mock import patch
 import unittest
 from urllib.error import HTTPError
@@ -17,6 +18,7 @@ from zet.webserver.news import (
     html_to_text,
     sanitize_rss_html,
 )
+import zet.webserver.webserver as webserver
 
 
 class FakeResponse:
@@ -200,6 +202,14 @@ class NewsFeedParsingTest(unittest.TestCase):
                 NewsCache, '_parse_feed', side_effect=[[item, item], []]):
             self.assertTrue(cache.refresh())
         self.assertEqual(cache._items, [item])
+        self.assertEqual(
+            json.loads(cache.status_message() or '{}'),
+            {
+                'type': 'news-status',
+                'version': cache._version,
+                'latestAt': MAX_NEWS_TIMESTAMP,
+            },
+        )
 
     def test_failed_category_keeps_last_good_items(self) -> None:
         traffic_item = NewsItem('traffic', 'traffic', 1, 'Traffic', '',
@@ -237,6 +247,34 @@ class NewsFeedParsingTest(unittest.TestCase):
         with patch('zet.webserver.news.RSS_OPENER.open', return_value=response):
             with self.assertRaisesRegex(ValueError, 'outside zet.hr'):
                 NewsCache._parse_feed('https://www.zet.hr/rss', 'traffic')
+
+
+class NewsHttpTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.previous_server = webserver.gtfs_server
+        self.server = webserver.GtfsServer('ws://unused')
+        self.server.news_cache._version = '0123456789abcdef'
+        self.server.news_cache._fetched_at = 1
+        self.server.news_cache._items = [NewsItem(
+            'item', 'traffic', 1, 'Title', '', 'https://www.zet.hr/item')]
+        webserver.gtfs_server = self.server
+
+    def tearDown(self) -> None:
+        webserver.gtfs_server = self.previous_server
+
+    def test_news_endpoint_revalidates_with_etag(self) -> None:
+        client = webserver.app.test_client()
+        response = client.get('/news')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['ETag'], '"0123456789abcdef"')
+        self.assertEqual(response.headers['Cache-Control'], 'private, no-cache')
+        self.assertEqual(response.json['type'], 'news')
+
+        response = client.get(
+            '/news', headers={'If-None-Match': '"0123456789abcdef"'})
+        self.assertEqual(response.status_code, 304)
+        self.assertEqual(response.headers['ETag'], '"0123456789abcdef"')
 
 
 if __name__ == '__main__':

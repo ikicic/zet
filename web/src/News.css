@@ -123,13 +123,6 @@
   height: 7px;
   border: 1px solid white;
   border-radius: 50%;
-}
-
-.news-control-dot-traffic {
-  background: #e68100;
-}
-
-.news-control-dot-news {
   background: #2879bb;
 }
 
