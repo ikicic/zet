@@ -346,9 +346,14 @@ function emitJoin(vertices: number[], join: Join) {
   }
 }
 
-function pushPolyline(vertices: number[], points: Point[], dpr: number) {
+function pushPolyline(
+  vertices: number[],
+  points: Point[],
+  width: number,
+  dpr: number,
+) {
   const minDist = 0.5 * dpr;
-  const extent = dpr + 0.5 * ANTIALIAS_WIDTH;
+  const extent = width * 0.5 + 0.5 * ANTIALIAS_WIDTH;
 
   const segments = buildSegments(dedupeTrailPoints(points, minDist));
   if (segments.length === 0) {
@@ -488,6 +493,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     }
 
     const dpr = getMapDpr();
+    const width = 3 * dpr;
     const vertices: number[] = [];
     const points: Point[] = [];
     for (let i = 0; i < this.selectedShape.lons.length; i++) {
@@ -497,7 +503,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
       ]);
       points.push([point.x * dpr, point.y * dpr]);
     }
-    pushPolyline(vertices, points, dpr);
+    pushPolyline(vertices, points, width, dpr);
 
     const vertexCount = vertices.length / FLOATS_PER_VERTEX;
     if (vertexCount === 0) return;
@@ -512,7 +518,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     gl.enableVertexAttribArray(this.aDistance);
     gl.vertexAttribPointer(this.aDistance, 1, gl.FLOAT, false, stride, 2 * 4);
     gl.uniform2f(this.uViewport, canvas.width, canvas.height);
-    gl.uniform1f(this.uWidth, 3 * dpr);
+    gl.uniform1f(this.uWidth, width);
     gl.uniform4f(this.uColor, 0, 0, 0, 1);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -546,7 +552,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
         const point = this.map.project([vehicle.lon[i], vehicle.lat[i]]);
         points.push([point.x * dpr, point.y * dpr]);
       }
-      pushPolyline(vertices, points, dpr);
+      pushPolyline(vertices, points, 2 * dpr, dpr);
     }
 
     this.vertexCount = vertices.length / FLOATS_PER_VERTEX;
