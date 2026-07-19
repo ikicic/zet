@@ -431,10 +431,8 @@ export function Map() {
           highlightedVehicleCriterion.current.setSelectedRouteId(
             vehicle.routeId,
           );
-          if (!vehicle.shapeId) {
-            redraw();
-          }
-          // Otherwise, the useEffect will handle fetching the shape and calling redraw
+          // Highlight immediately; the selected shape is fetched separately.
+          redraw();
         },
         onNothingClick: () => {
           setSelectedShapeId(null);
