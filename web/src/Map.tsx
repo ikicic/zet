@@ -43,6 +43,27 @@ import { useLocalStorage } from "./useLocalStorage";
 
 const PERFORMANCE_MODE =
   new URLSearchParams(window.location.search).get("perf") === "1";
+const LOCATION_TRACKING_ENABLED_KEY = "zet-location-tracking-enabled";
+
+function getLocationTrackingEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(LOCATION_TRACKING_ENABLED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setLocationTrackingEnabled(enabled: boolean) {
+  try {
+    if (enabled) {
+      window.localStorage.setItem(LOCATION_TRACKING_ENABLED_KEY, "1");
+    } else {
+      window.localStorage.removeItem(LOCATION_TRACKING_ENABLED_KEY);
+    }
+  } catch {
+    // Location tracking remains usable when local storage is unavailable.
+  }
+}
 
 interface LoadedBigStaticData {
   key: string;
@@ -288,6 +309,14 @@ export function Map() {
       return;
     }
 
+    let isUnmounted = false;
+    const shouldRestoreLocationTracking = getLocationTrackingEnabled();
+    const geolocationPermission = shouldRestoreLocationTracking
+      ? navigator.permissions
+          ?.query({ name: "geolocation" })
+          .catch(() => undefined)
+      : undefined;
+
     const center: [number, number] = [15.9819, 45.815];
     const map = (mapRef.current = new maplibregl.Map({
       container: mapContainer.current,
@@ -314,14 +343,47 @@ export function Map() {
       map.on("resize", updateMapCanvasDpr);
     }
 
-    map.addControl(
-      new maplibregl.GeolocateControl({
-        positionOptions: {
-          enableHighAccuracy: true,
-        },
-        trackUserLocation: true,
-      }),
-    );
+    const geolocateControl = new maplibregl.GeolocateControl({
+      fitBoundsOptions: {
+        maxZoom: 13,
+      },
+      positionOptions: {
+        enableHighAccuracy: true,
+      },
+      trackUserLocation: true,
+    });
+    map.addControl(geolocateControl);
+    let lostLocationFocus = false;
+    geolocateControl.on("trackuserlocationstart", () => {
+      setLocationTrackingEnabled(true);
+    });
+    geolocateControl.on("trackuserlocationend", () => {
+      queueMicrotask(() => {
+        if (!lostLocationFocus) {
+          setLocationTrackingEnabled(false);
+        }
+        lostLocationFocus = false;
+      });
+    });
+    geolocateControl.on("userlocationlostfocus", () => {
+      lostLocationFocus = true;
+    });
+    let restoreAttempts = 0;
+    const restoreLocationTracking = () => {
+      if (isUnmounted) {
+        return;
+      }
+
+      const restored = geolocateControl.trigger();
+      if (!restored && restoreAttempts++ < 60) {
+        requestAnimationFrame(restoreLocationTracking);
+      }
+    };
+    void geolocationPermission?.then((permission) => {
+      if (!isUnmounted && permission?.state === "granted") {
+        restoreLocationTracking();
+      }
+    });
 
     map.addControl(new InfoControl(() => setShowInfo(true)));
     const newsControl = new NewsControl(openNews);
@@ -470,6 +532,7 @@ export function Map() {
 
     // Cleanup
     return () => {
+      isUnmounted = true;
       if (vehicleLayerRef.current) {
         vehicleLayerRef.current.destroy();
       }
