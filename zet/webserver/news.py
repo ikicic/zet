@@ -325,40 +325,27 @@ class NewsCache:
             return False
 
         with self._lock:
-            for kind, items in fetched.items():
-                self._items_by_kind[kind] = items
-            combined_items = sorted(
-                self._items_by_kind['traffic'] + self._items_by_kind['news'],
-                key=lambda item: (item.published_at, item.id),
-                reverse=True,
-            )
-            unique_items: list[NewsItem] = []
-            item_ids: set[str] = set()
-            for item in combined_items:
-                if item.id not in item_ids:
-                    unique_items.append(item)
-                    item_ids.add(item.id)
-            combined_items = unique_items
-            # Temporary development aid: exercise new-news delivery on every
-            # refresh without ever exposing synthetic notices in production.
-            if os.environ.get('ZET_DEV') == '1':
-                now = int(time.time())
-                combined_items.insert(0, NewsItem(
-                    id=f'dev-news-{now}',
-                    kind='traffic',
-                    published_at=now,
-                    title='Testna obavijest',
-                    summary_html='<strong>Test:</strong> nova obavijest s poslužitelja.',
-                    url='https://www.zet.hr/',
-                ))
-            self._items = combined_items[:MAX_NEWS_ITEMS]
-            encoded_items = json.dumps(
-                [item.to_json() for item in self._items],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(',', ':'),
-            ).encode()
-            version = hashlib.sha256(encoded_items).hexdigest()[:16]
+            items_by_kind = dict(self._items_by_kind)
+        items_by_kind.update(fetched)
+        combined_items = sorted(
+            items_by_kind['traffic'] + items_by_kind['news'],
+            key=lambda item: (item.published_at, item.id), reverse=True)
+        unique_items = list({item.id: item for item in reversed(combined_items)}.values())
+        combined_items = list(reversed(unique_items))
+        if os.environ.get('ZET_DEV') == '1':
+            now = int(time.time())
+            combined_items.insert(0, NewsItem(
+                id=f'dev-news-{now}', kind='traffic', published_at=now,
+                title='Testna obavijest',
+                summary_html='<strong>Test:</strong> nova obavijest s poslužitelja.',
+                url='https://www.zet.hr/'))
+        items = combined_items[:MAX_NEWS_ITEMS]
+        encoded_items = json.dumps([item.to_json() for item in items], ensure_ascii=False,
+                                  sort_keys=True, separators=(',', ':')).encode()
+        version = hashlib.sha256(encoded_items).hexdigest()[:16]
+        with self._lock:
+            self._items_by_kind = items_by_kind
+            self._items = items
             changed = version != self._version
             self._version = version
             self._fetched_at = int(time.time())
@@ -371,20 +358,17 @@ class NewsCache:
         with self._lock:
             if not self._version:
                 return None
-            message = json.dumps({
-                'type': 'news',
-                'version': self._version,
-                'fetchedAt': self._fetched_at,
-                'items': [item.to_json() for item in self._items],
-            }, separators=(',', ':'))
-            return self._version, message
+            version, fetched_at, items = self._version, self._fetched_at, list(self._items)
+        message = json.dumps({'type': 'news', 'version': version,
+                              'fetchedAt': fetched_at,
+                              'items': [item.to_json() for item in items]}, separators=(',', ':'))
+        return version, message
 
     def status_message(self) -> str | None:
         with self._lock:
             if not self._version:
                 return None
-            return json.dumps({
-                'type': 'news-status',
-                'version': self._version,
-                'latestAt': self._items[0].published_at if self._items else None,
-            }, separators=(',', ':'))
+            version = self._version
+            latest_at = self._items[0].published_at if self._items else None
+        return json.dumps({'type': 'news-status', 'version': version,
+                           'latestAt': latest_at}, separators=(',', ':'))

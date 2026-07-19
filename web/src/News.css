@@ -115,6 +115,31 @@
   display: block;
 }
 
+.news-control button.news-control-loading svg,
+.news-control button.news-control-loading .news-control-dot {
+  visibility: hidden;
+}
+
+.news-control button.news-control-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 16px;
+  height: 16px;
+  margin: auto;
+  background: conic-gradient(from 0deg, #777, #777 75%, transparent 75%);
+  border-radius: 50%;
+  -webkit-mask: radial-gradient(transparent 5px, #000 5.5px);
+  mask: radial-gradient(transparent 5px, #000 5.5px);
+  animation: news-control-spin 0.7s linear infinite;
+}
+
+@keyframes news-control-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .news-control-dot {
   position: absolute;
   top: 4px;

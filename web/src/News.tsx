@@ -32,7 +32,7 @@ const MAX_NEWS_ID_LENGTH = 512;
 const MAX_NEWS_TITLE_LENGTH = 250;
 const MAX_NEWS_URL_LENGTH = 2048;
 const MAX_NEWS_SUMMARY_HTML_LENGTH = 8192;
-const MAX_NEWS_TIMESTAMP = 4_102_444_800; // 2100-01-01
+const MAX_NEWS_TIMESTAMP = 4102444800; // 2100-01-01
 const SAFE_SUMMARY_TAGS = new Set([
   "strong",
   "b",
@@ -213,9 +213,11 @@ function formatDate(timestamp: number): string {
 
 export const NewsOverlay = memo(function NewsOverlay({
   snapshot,
+  state,
   onClose,
 }: {
   snapshot: NewsSnapshot | null;
+  state: "error" | "empty" | "ready";
   onClose: () => void;
 }) {
   const items = snapshot?.items ?? [];
@@ -237,8 +239,12 @@ export const NewsOverlay = memo(function NewsOverlay({
             ✕
           </button>
         </div>
-        {items.length === 0 ? (
-          <p>Obavijesti ZET-a trenutačno nisu dostupne.</p>
+        {state === "error" ? (
+          <p>Došlo je do pogreške pri učitavanju obavijesti.</p>
+        ) : state === "empty" ? (
+          <p>Nema pronađenih obavijesti.</p>
+        ) : items.length === 0 ? (
+          <p>Nema pronađenih obavijesti.</p>
         ) : (
           <div className="news-list">
             {items.map((item) => (
@@ -271,6 +277,7 @@ export const NewsOverlay = memo(function NewsOverlay({
 export class NewsControl {
   private readonly onShow: () => void;
   private dot: HTMLSpanElement | null = null;
+  private button: HTMLButtonElement | null = null;
 
   constructor(onShow: () => void) {
     this.onShow = onShow;
@@ -287,6 +294,7 @@ export class NewsControl {
     button.title = "Obavijesti ZET-a";
     button.setAttribute("aria-label", button.title);
     button.addEventListener("click", this.onShow);
+    this.button = button;
 
     this.dot = document.createElement("span");
     this.dot.className = "news-control-dot";
@@ -301,7 +309,14 @@ export class NewsControl {
     this.dot.hidden = !hasUnreadNews;
   }
 
+  setLoading(loading: boolean) {
+    if (!this.button) return;
+    this.button.disabled = loading;
+    this.button.classList.toggle("news-control-loading", loading);
+  }
+
   onRemove() {
     this.dot = null;
+    this.button = null;
   }
 }

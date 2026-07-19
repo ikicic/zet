@@ -149,7 +149,9 @@ export function Map() {
       deserialize: deserializeSeenNewsVersion,
     },
   );
-  const [showNews, setShowNews] = useState(false);
+  const [newsOverlayState, setNewsOverlayState] = useState<
+    "hidden" | "error" | "empty" | "ready"
+  >("hidden");
   const newsRef = useRef<NewsSnapshot | null>(news);
   const newsStatusRef = useRef<NewsStatus | null>(newsStatus);
   const seenNewsVersionRef = useRef(seenNewsVersion);
@@ -173,6 +175,7 @@ export function Map() {
         if (response.status === 204) {
           newsRef.current = null;
           setNews(null);
+          setNewsOverlayState("empty");
           return;
         }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -182,11 +185,14 @@ export function Map() {
         }
         newsRef.current = snapshot;
         setNews(snapshot);
+        setNewsOverlayState("ready");
         seenNewsVersionRef.current = snapshot.version;
         setSeenNewsVersion(snapshot.version);
       } catch (error) {
         console.error("Could not load news:", error);
+        setNewsOverlayState("error");
       } finally {
+        newsControlRef.current?.setLoading(false);
         newsFetchRef.current = null;
       }
     };
@@ -194,10 +200,16 @@ export function Map() {
   };
 
   const openNews = () => {
-    setShowNews(true);
+    if (newsRef.current?.version === newsStatusRef.current?.version) {
+      setNewsOverlayState("ready");
+      return;
+    }
+    newsControlRef.current?.setLoading(true);
     loadNews();
   };
-  const closeNews = useCallback(() => setShowNews(false), []);
+  const closeNews = useCallback(() => {
+    setNewsOverlayState("hidden");
+  }, []);
 
   useEffect(() => {
     removeLegacyNewsStorage();
@@ -619,7 +631,13 @@ export function Map() {
         )}
       </div>
       {showInfo && <InfoOverlay onClose={() => setShowInfo(false)} />}
-      {showNews && <NewsOverlay snapshot={news} onClose={closeNews} />}
+      {newsOverlayState !== "hidden" && (
+        <NewsOverlay
+          snapshot={news}
+          state={newsOverlayState}
+          onClose={closeNews}
+        />
+      )}
       {showFilter && (
         <FilterOverlay
           onClose={() => setShowFilter(false)}
