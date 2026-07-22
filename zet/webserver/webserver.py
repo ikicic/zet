@@ -24,7 +24,12 @@ import simple_websocket
 import websockets
 
 import zet.math.latlon as latlon
-from zet.webserver.news import NEWS_FETCH_INTERVAL_SECONDS, NewsCache
+from zet.webserver.news import (
+    NEWS_FETCH_INTERVAL_SECONDS,
+    NEWS_SCHEMA_V1,
+    NEWS_SCHEMA_V2,
+    NewsCache,
+)
 from zet.utils.email import send_feedback_email
 from zet.utils.pushover import RateLimitedNotifier
 
@@ -602,11 +607,12 @@ class GtfsServer:
         self._notify_message(lambda client: message.for_version(client.version))
 
     def _notify_news_status(self) -> None:
-        message = self.news_cache.status_message()
-        if message is None:
-            return
-        self._notify_message(
-            lambda client: message if client.version >= 3 else None)
+        schema_v1_message = self.news_cache.status_message(NEWS_SCHEMA_V1)
+        schema_v2_message = self.news_cache.status_message(NEWS_SCHEMA_V2)
+        self._notify_message(lambda client: (
+            schema_v2_message if client.version >= 4
+            else schema_v1_message if client.version >= 3
+            else None))
 
     def _notify_message(
             self,
@@ -667,7 +673,9 @@ def handle_websocket(
             if gtfs_server.latest_message:
                 client.ws.send(gtfs_server.latest_message.for_version(version))
             if version >= 3:
-                news_status = gtfs_server.news_cache.status_message()
+                schema = (NEWS_SCHEMA_V2 if version >= 4
+                          else NEWS_SCHEMA_V1)
+                news_status = gtfs_server.news_cache.status_message(schema)
                 if news_status is not None:
                     client.ws.send(news_status)
         while True:
@@ -702,11 +710,24 @@ def websocket_v3(ws: simple_websocket.ws.Server):
     handle_websocket(ws, version=3)
 
 
+@sock.route('/ws-v4')
+def websocket_v4(ws: simple_websocket.ws.Server):
+    """v4 opts into news schema v2."""
+    handle_websocket(ws, version=4)
+
+
 @app.route('/news')
 def news():
     if gtfs_server is None:
         raise Exception("gtfs_server is not initialized")
-    snapshot = gtfs_server.news_cache.snapshot()
+    raw_schema = request.args.get('schema')
+    if raw_schema is None or raw_schema == str(NEWS_SCHEMA_V1):
+        schema = NEWS_SCHEMA_V1
+    elif raw_schema == str(NEWS_SCHEMA_V2):
+        schema = NEWS_SCHEMA_V2
+    else:
+        return {'error': 'Unsupported news schema'}, 400
+    snapshot = gtfs_server.news_cache.snapshot(schema)
     if snapshot is None:
         return '', 204
     version, message = snapshot

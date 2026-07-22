@@ -190,7 +190,7 @@ export function Map() {
 
     const fetchNews = async () => {
       try {
-        const response = await fetch(getHttpUrl("news"), {
+        const response = await fetch(getHttpUrl("news?schema=2"), {
           cache: "no-cache",
         });
         if (response.status === 204) {
@@ -586,7 +586,7 @@ export function Map() {
         return;
       }
 
-      const url = new URL(getUrl("ws", "wss", "ws-v3"));
+      const url = new URL(getUrl("ws", "wss", "ws-v4"));
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => {

@@ -46,6 +46,8 @@ MAX_NEWS_SUMMARY_SOURCE_LENGTH: int = 4096
 MAX_NEWS_SUMMARY_HTML_LENGTH: int = 8192
 MIN_NEWS_TIMESTAMP: int = 0
 MAX_NEWS_TIMESTAMP: int = 4_102_444_800  # 2100-01-01
+NEWS_SCHEMA_V1: int = 1
+NEWS_SCHEMA_V2: int = 2
 
 logger = logging.getLogger(__name__)
 
@@ -254,8 +256,10 @@ class NewsCache:
         self._lock = threading.Lock()
         self._items_by_kind: dict[str, list[NewsItem]] = {
             'traffic': [], 'news': [], 'app': []}
-        self._items: list[NewsItem] = []
-        self._version = ''
+        self._items_by_schema: dict[int, list[NewsItem]] = {
+            NEWS_SCHEMA_V1: [], NEWS_SCHEMA_V2: []}
+        self._versions_by_schema: dict[int, str] = {
+            NEWS_SCHEMA_V1: '', NEWS_SCHEMA_V2: ''}
         self._fetched_at = 0
         if app_news_path is not None:
             self._app_news_path = app_news_path
@@ -433,12 +437,17 @@ class NewsCache:
         with self._lock:
             items_by_kind = dict(self._items_by_kind)
         items_by_kind.update(fetched)
-        combined_items = sorted(
-            [item for kind_items in items_by_kind.values()
-             for item in kind_items],
-            key=lambda item: (item.published_at, item.id), reverse=True)
-        unique_items = list({item.id: item for item in reversed(combined_items)}.values())
-        combined_items = list(reversed(unique_items))
+
+        def combine(kinds: tuple[str, ...]) -> list[NewsItem]:
+            combined = sorted(
+                [item for kind in kinds for item in items_by_kind[kind]],
+                key=lambda item: (item.published_at, item.id), reverse=True)
+            unique = list(
+                {item.id: item for item in reversed(combined)}.values())
+            return list(reversed(unique))
+
+        schema_v1_items = combine(('traffic', 'news'))[:MAX_NEWS_ITEMS]
+        combined_items = combine(('traffic', 'news', 'app'))
         if os.environ.get('ZET_DEV') == '1':
             now = int(time.time())
             combined_items.insert(0, NewsItem(
@@ -446,36 +455,53 @@ class NewsCache:
                 title='Testna obavijest',
                 summary_html='<strong>Test:</strong> nova obavijest s poslužitelja.',
                 url=None))
-        items = combined_items[:MAX_NEWS_ITEMS]
-        encoded_items = json.dumps([item.to_json() for item in items], ensure_ascii=False,
-                                  sort_keys=True, separators=(',', ':')).encode()
-        version = hashlib.sha256(encoded_items).hexdigest()[:16]
+        schema_v2_items = combined_items[:MAX_NEWS_ITEMS]
+
+        def items_version(version_items: list[NewsItem]) -> str:
+            encoded_items = json.dumps(
+                [item.to_json() for item in version_items],
+                ensure_ascii=False, sort_keys=True,
+                separators=(',', ':')).encode()
+            return hashlib.sha256(encoded_items).hexdigest()[:16]
+
+        items_by_schema = {
+            NEWS_SCHEMA_V1: schema_v1_items,
+            NEWS_SCHEMA_V2: schema_v2_items,
+        }
+        versions_by_schema = {
+            schema: items_version(schema_items)
+            for schema, schema_items in items_by_schema.items()
+        }
         with self._lock:
             self._items_by_kind = items_by_kind
-            self._items = items
-            changed = version != self._version
-            self._version = version
+            changed = versions_by_schema != self._versions_by_schema
+            self._items_by_schema = items_by_schema
+            self._versions_by_schema = versions_by_schema
             self._fetched_at = int(time.time())
             if changed:
                 logger.info('News changed: %d items in snapshot',
-                            len(self._items))
+                            len(schema_v2_items))
             return changed
 
-    def snapshot(self) -> tuple[str, str] | None:
+    def snapshot(
+            self, schema: int = NEWS_SCHEMA_V1) -> tuple[str, str] | None:
         with self._lock:
-            if not self._version:
+            version = self._versions_by_schema[schema]
+            items = list(self._items_by_schema[schema])
+            if not version:
                 return None
-            version, fetched_at, items = self._version, self._fetched_at, list(self._items)
+            fetched_at = self._fetched_at
         message = json.dumps({'type': 'news', 'version': version,
                               'fetchedAt': fetched_at,
                               'items': [item.to_json() for item in items]}, separators=(',', ':'))
         return version, message
 
-    def status_message(self) -> str | None:
+    def status_message(self, schema: int = NEWS_SCHEMA_V1) -> str | None:
         with self._lock:
-            if not self._version:
+            version = self._versions_by_schema[schema]
+            items = self._items_by_schema[schema]
+            if not version:
                 return None
-            version = self._version
-            latest_at = self._items[0].published_at if self._items else None
+            latest_at = items[0].published_at if items else None
         return json.dumps({'type': 'news-status', 'version': version,
                            'latestAt': latest_at}, separators=(',', ':'))

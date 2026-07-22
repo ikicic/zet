@@ -14,6 +14,8 @@ from zet.webserver.news import (
     MAX_NEWS_TITLE_LENGTH,
     MAX_RSS_ITEMS_PER_FEED,
     MAX_RSS_RESPONSE_BYTES,
+    NEWS_SCHEMA_V1,
+    NEWS_SCHEMA_V2,
     RSS_FETCH_TIMEOUT_SECONDS,
     NewsItem,
     NewsCache,
@@ -190,7 +192,7 @@ class NewsFeedParsingTest(unittest.TestCase):
             self.assertFalse(cache.refresh())
 
         self.assertEqual(cache._items_by_kind['app'], [app_item])
-        self.assertEqual(cache._items, [app_item])
+        self.assertEqual(cache._items_by_schema[NEWS_SCHEMA_V2], [app_item])
 
     def test_missing_default_app_news_file_is_an_empty_category(self) -> None:
         cache = NewsCache()
@@ -306,17 +308,48 @@ class NewsFeedParsingTest(unittest.TestCase):
                         'https://www.zet.hr/item')
         cache = NewsCache()
         with patch.object(
-                NewsCache, '_parse_feed', side_effect=[[item, item], []]):
+                NewsCache, '_parse_feed', side_effect=[[item, item], []]), \
+                patch.object(NewsCache, '_parse_app_news', return_value=[]):
             self.assertTrue(cache.refresh())
-        self.assertEqual(cache._items, [item])
+        self.assertEqual(cache._items_by_schema[NEWS_SCHEMA_V2], [item])
         self.assertEqual(
             json.loads(cache.status_message() or '{}'),
             {
                 'type': 'news-status',
-                'version': cache._version,
+                'version': cache._versions_by_schema[NEWS_SCHEMA_V1],
                 'latestAt': MAX_NEWS_TIMESTAMP,
             },
         )
+
+    def test_schema_v1_excludes_app_news(self) -> None:
+        traffic_item = NewsItem(
+            'traffic', 'traffic', 1, 'Traffic', '',
+            'https://www.zet.hr/traffic')
+        app_item = NewsItem('app', 'app', 2, 'App', 'Summary', None)
+        cache = NewsCache('/unused/app_news.json')
+        with patch.object(
+                NewsCache, '_parse_feed', side_effect=[[traffic_item], []]), \
+                patch.object(
+                    NewsCache, '_parse_app_news', return_value=[app_item]):
+            self.assertTrue(cache.refresh())
+
+        schema_v1_version, schema_v1_message = (
+            cache.snapshot(NEWS_SCHEMA_V1) or ('', ''))
+        schema_v2_version, schema_v2_message = (
+            cache.snapshot(NEWS_SCHEMA_V2) or ('', ''))
+        self.assertEqual(
+            [item['kind'] for item in json.loads(schema_v1_message)['items']],
+            ['traffic'])
+        self.assertEqual(
+            [item['kind'] for item in json.loads(schema_v2_message)['items']],
+            ['app', 'traffic'])
+        self.assertNotEqual(schema_v1_version, schema_v2_version)
+        self.assertEqual(
+            json.loads(cache.status_message(NEWS_SCHEMA_V1) or '{}')['version'],
+            schema_v1_version)
+        self.assertEqual(
+            json.loads(cache.status_message(NEWS_SCHEMA_V2) or '{}')['version'],
+            schema_v2_version)
 
     def test_failed_category_keeps_last_good_items(self) -> None:
         traffic_item = NewsItem('traffic', 'traffic', 1, 'Traffic', '',
@@ -360,10 +393,18 @@ class NewsHttpTest(unittest.TestCase):
     def setUp(self) -> None:
         self.previous_server = webserver.gtfs_server
         self.server = webserver.GtfsServer('ws://unused')
-        self.server.news_cache._version = '0123456789abcdef'
+        self.server.news_cache._versions_by_schema = {
+            NEWS_SCHEMA_V1: '1111111111111111',
+            NEWS_SCHEMA_V2: '2222222222222222',
+        }
         self.server.news_cache._fetched_at = 1
-        self.server.news_cache._items = [NewsItem(
-            'item', 'traffic', 1, 'Title', '', 'https://www.zet.hr/item')]
+        traffic_item = NewsItem(
+            'item', 'traffic', 1, 'Title', '', 'https://www.zet.hr/item')
+        app_item = NewsItem('app', 'app', 2, 'App', 'Summary', None)
+        self.server.news_cache._items_by_schema = {
+            NEWS_SCHEMA_V1: [traffic_item],
+            NEWS_SCHEMA_V2: [app_item, traffic_item],
+        }
         webserver.gtfs_server = self.server
 
     def tearDown(self) -> None:
@@ -374,14 +415,65 @@ class NewsHttpTest(unittest.TestCase):
         response = client.get('/news')
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers['ETag'], '"0123456789abcdef"')
+        self.assertEqual(response.headers['ETag'], '"1111111111111111"')
         self.assertEqual(response.headers['Cache-Control'], 'private, no-cache')
         self.assertEqual(response.json['type'], 'news')
+        self.assertEqual(
+            [item['kind'] for item in response.json['items']], ['traffic'])
 
         response = client.get(
-            '/news', headers={'If-None-Match': '"0123456789abcdef"'})
+            '/news', headers={'If-None-Match': '"1111111111111111"'})
         self.assertEqual(response.status_code, 304)
-        self.assertEqual(response.headers['ETag'], '"0123456789abcdef"')
+        self.assertEqual(response.headers['ETag'], '"1111111111111111"')
+
+    def test_news_schema_2_includes_app_news(self) -> None:
+        client = webserver.app.test_client()
+        response = client.get('/news?schema=2')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['ETag'], '"2222222222222222"')
+        self.assertEqual(
+            [item['kind'] for item in response.json['items']],
+            ['app', 'traffic'])
+
+    def test_news_endpoint_rejects_unknown_schema(self) -> None:
+        response = webserver.app.test_client().get('/news?schema=3')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_websocket_versions_receive_matching_news_status(self) -> None:
+        class FakeWebSocket:
+            def __init__(self) -> None:
+                self.sent: list[str] = []
+
+            def send(self, message: str) -> None:
+                self.sent.append(message)
+
+            def receive(self) -> None:
+                raise RuntimeError('disconnect')
+
+        schema_v1_ws = FakeWebSocket()
+        schema_v2_ws = FakeWebSocket()
+        webserver.handle_websocket(schema_v1_ws, version=3)
+        webserver.handle_websocket(schema_v2_ws, version=4)
+
+        self.assertEqual(
+            json.loads(schema_v1_ws.sent[0])['version'], '1111111111111111')
+        self.assertEqual(
+            json.loads(schema_v2_ws.sent[0])['version'], '2222222222222222')
+
+        schema_v1_ws.sent.clear()
+        schema_v2_ws.sent.clear()
+        self.server.ws_clients = {
+            webserver.WsClient(schema_v1_ws, version=3),
+            webserver.WsClient(schema_v2_ws, version=4),
+        }
+        self.server._notify_news_status()
+
+        self.assertEqual(
+            json.loads(schema_v1_ws.sent[0])['version'], '1111111111111111')
+        self.assertEqual(
+            json.loads(schema_v2_ws.sent[0])['version'], '2222222222222222')
 
 
 if __name__ == '__main__':
