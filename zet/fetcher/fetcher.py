@@ -32,6 +32,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAX_SNAPSHOT_COUNT = 10000
+MIN_UNCHANGED_DELAY = 1.0
+MAX_UNCHANGED_DELAY = 10.0
+UNCHANGED_BACKOFF_FACTOR = 1.01
 
 @dataclass
 class SnapshotData:
@@ -333,8 +336,8 @@ class Fetcher:
                     f"{self.static_url}. Press Ctrl-C to stop.")
 
         long_delay = max(1, self.realtime_dt - 1)
-        short_delay = 1
-        current_delay = short_delay
+        unchanged_delay = MIN_UNCHANGED_DELAY
+        current_delay = unchanged_delay
 
         while self.running:
             data = try_fetch_url(self.realtime_url)
@@ -342,8 +345,12 @@ class Fetcher:
                 new_snapshot = self.store_realtime_snapshot(data)
                 if new_snapshot:
                     current_delay = long_delay
+                    unchanged_delay = MIN_UNCHANGED_DELAY
                 else:
-                    current_delay = short_delay
+                    current_delay = unchanged_delay
+                    unchanged_delay = min(
+                        unchanged_delay * UNCHANGED_BACKOFF_FACTOR,
+                        MAX_UNCHANGED_DELAY)
 
                 if self.maybe_fetch_static():
                     # Downloading the static data may take a few seconds,
