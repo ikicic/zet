@@ -2,6 +2,12 @@ from dataclasses import dataclass
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from typing import Any, Protocol, TypeAlias
+from urllib.error import HTTPError
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from xml.etree import ElementTree
+import datetime
 import hashlib
 import html
 import json
@@ -10,14 +16,9 @@ import os
 import re
 import threading
 import time
-from typing import Any, Protocol, TypeAlias
-from urllib.error import HTTPError
-from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
-from xml.etree import ElementTree
 
 
-NewsJson: TypeAlias = dict[str, str | int]
+NewsJson: TypeAlias = dict[str, str | int | None]
 
 
 class RssResponse(Protocol):
@@ -31,6 +32,9 @@ RSS_FETCH_TOTAL_TIMEOUT_SECONDS: int = 20
 MAX_RSS_RESPONSE_BYTES: int = 256 * 1024
 RSS_READ_CHUNK_BYTES: int = 16 * 1024
 MAX_RSS_ITEMS_PER_FEED: int = 100
+DEFAULT_APP_NEWS_FILE: str = 'app_news.json'
+MAX_APP_NEWS_FILE_BYTES: int = 64 * 1024
+MAX_APP_NEWS_ITEMS: int = 30
 RSS_FEEDS: tuple[tuple[str, str], ...] = (
     ('traffic', 'https://www.zet.hr/rss_promet.aspx'),
     ('news', 'https://www.zet.hr/rss_novosti.aspx'),
@@ -164,7 +168,7 @@ def news_item_id(
         published_at: int,
         title: str,
         summary_html: str,
-        url: str,
+        url: str | None,
 ) -> str:
     message = json.dumps(
         [kind, published_at, title, summary_html, url],
@@ -178,6 +182,11 @@ def is_zet_url(value: str) -> bool:
     parsed = urlparse(value)
     return (parsed.scheme == 'https'
             and parsed.hostname in {'zet.hr', 'www.zet.hr'})
+
+
+def is_https_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme == 'https' and parsed.hostname is not None
 
 
 class ZetRedirectHandler(HTTPRedirectHandler):
@@ -227,7 +236,7 @@ class NewsItem:
     published_at: int
     title: str
     summary_html: str
-    url: str
+    url: str | None
 
     def to_json(self) -> NewsJson:
         return {
@@ -241,13 +250,22 @@ class NewsItem:
 
 
 class NewsCache:
-    def __init__(self) -> None:
+    def __init__(self, app_news_path: str | None = None) -> None:
         self._lock = threading.Lock()
         self._items_by_kind: dict[str, list[NewsItem]] = {
-            'traffic': [], 'news': []}
+            'traffic': [], 'news': [], 'app': []}
         self._items: list[NewsItem] = []
         self._version = ''
         self._fetched_at = 0
+        if app_news_path is not None:
+            self._app_news_path = app_news_path
+            self._app_news_path_is_explicit = True
+        elif 'ZET_APP_NEWS_FILE' in os.environ:
+            self._app_news_path = os.environ['ZET_APP_NEWS_FILE']
+            self._app_news_path_is_explicit = True
+        else:
+            self._app_news_path = DEFAULT_APP_NEWS_FILE
+            self._app_news_path_is_explicit = False
 
     @staticmethod
     def _parse_feed(url: str, kind: str) -> list[NewsItem]:
@@ -311,6 +329,82 @@ class NewsCache:
             raise ValueError('RSS feed has items but none passed validation')
         return items
 
+    @staticmethod
+    def _parse_app_news(path: str) -> list[NewsItem]:
+        with open(path, 'rb') as file:
+            raw_data = file.read(MAX_APP_NEWS_FILE_BYTES + 1)
+        if len(raw_data) > MAX_APP_NEWS_FILE_BYTES:
+            raise ValueError('app news file exceeds size limit')
+
+        raw_items = json.loads(raw_data)
+        if not isinstance(raw_items, list):
+            raise ValueError('app news file must contain a JSON array')
+        if len(raw_items) > MAX_APP_NEWS_ITEMS:
+            raise ValueError(
+                f'app news file contains more than {MAX_APP_NEWS_ITEMS} items')
+
+        items: list[NewsItem] = []
+        allowed_keys = {'publishedAt', 'title', 'summary', 'url'}
+        for index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                raise ValueError(f'app news item {index} must be an object')
+            unknown_keys = set(raw_item) - allowed_keys
+            if unknown_keys:
+                raise ValueError(
+                    f'app news item {index} has unknown fields: '
+                    f'{", ".join(sorted(unknown_keys))}')
+
+            published = raw_item.get('publishedAt')
+            title = raw_item.get('title')
+            summary = raw_item.get('summary', '')
+            url = raw_item.get('url')
+            if not isinstance(published, str):
+                raise ValueError(
+                    f'app news item {index} publishedAt must be a string')
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError(
+                    f'app news item {index} title must be a non-empty string')
+            if len(title) > MAX_NEWS_TITLE_LENGTH:
+                raise ValueError(f'app news item {index} title is too long')
+            if not isinstance(summary, str):
+                raise ValueError(f'app news item {index} summary must be a string')
+            if len(summary) > MAX_NEWS_SUMMARY_SOURCE_LENGTH:
+                raise ValueError(f'app news item {index} summary is too long')
+            if url is not None and (
+                    not isinstance(url, str)
+                    or len(url) > MAX_NEWS_URL_LENGTH
+                    or not is_https_url(url)):
+                raise ValueError(
+                    f'app news item {index} url must be null or an HTTPS URL')
+
+            try:
+                published_datetime = datetime.datetime.fromisoformat(published)
+            except ValueError as e:
+                raise ValueError(
+                    f'app news item {index} has invalid publishedAt') from e
+            if (published_datetime.tzinfo is None
+                    or published_datetime.utcoffset() is None):
+                raise ValueError(
+                    f'app news item {index} publishedAt must include a timezone')
+            published_at = int(published_datetime.timestamp())
+            if not MIN_NEWS_TIMESTAMP <= published_at <= MAX_NEWS_TIMESTAMP:
+                raise ValueError(
+                    f'app news item {index} publishedAt is out of range')
+
+            title = ' '.join(title.split())
+            summary_html = limit_summary_html(
+                html.escape(summary).replace('\r\n', '\n')
+                .replace('\r', '\n').replace('\n', '<br>'))
+            items.append(NewsItem(
+                id=news_item_id('app', published_at, title, summary_html, url),
+                kind='app',
+                published_at=published_at,
+                title=title,
+                summary_html=summary_html,
+                url=url,
+            ))
+        return items
+
     def refresh(self) -> bool:
         fetched: dict[str, list[NewsItem]] = {}
         for kind, url in RSS_FEEDS:
@@ -321,6 +415,18 @@ class NewsCache:
                 logger.warning('Failed to fetch %s RSS feed (%s): %s',
                                kind, url, e)
 
+        try:
+            fetched['app'] = self._parse_app_news(self._app_news_path)
+        except FileNotFoundError as e:
+            if self._app_news_path_is_explicit:
+                logger.warning('Failed to read app news file (%s): %s',
+                               self._app_news_path, e)
+            else:
+                fetched['app'] = []
+        except Exception as e:
+            logger.warning('Failed to read app news file (%s): %s',
+                           self._app_news_path, e)
+
         if not fetched:
             return False
 
@@ -328,17 +434,18 @@ class NewsCache:
             items_by_kind = dict(self._items_by_kind)
         items_by_kind.update(fetched)
         combined_items = sorted(
-            items_by_kind['traffic'] + items_by_kind['news'],
+            [item for kind_items in items_by_kind.values()
+             for item in kind_items],
             key=lambda item: (item.published_at, item.id), reverse=True)
         unique_items = list({item.id: item for item in reversed(combined_items)}.values())
         combined_items = list(reversed(unique_items))
         if os.environ.get('ZET_DEV') == '1':
             now = int(time.time())
             combined_items.insert(0, NewsItem(
-                id=f'dev-news-{now}', kind='traffic', published_at=now,
+                id=f'dev-news-{now}', kind='app', published_at=now,
                 title='Testna obavijest',
                 summary_html='<strong>Test:</strong> nova obavijest s poslužitelja.',
-                url='https://www.zet.hr/'))
+                url=None))
         items = combined_items[:MAX_NEWS_ITEMS]
         encoded_items = json.dumps([item.to_json() for item in items], ensure_ascii=False,
                                   sort_keys=True, separators=(',', ':')).encode()
@@ -350,7 +457,7 @@ class NewsCache:
             self._version = version
             self._fetched_at = int(time.time())
             if changed:
-                logger.info('RSS news changed: %d items in snapshot',
+                logger.info('News changed: %d items in snapshot',
                             len(self._items))
             return changed
 

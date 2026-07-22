@@ -2,7 +2,7 @@ import { memo } from "react";
 import { Overlay } from "./Overlay";
 import "./News.css";
 
-export type NewsKind = "traffic" | "news";
+export type NewsKind = "traffic" | "news" | "app";
 
 export interface NewsItem {
   id: string;
@@ -10,7 +10,7 @@ export interface NewsItem {
   publishedAt: number;
   title: string;
   summaryHtml: string;
-  url: string;
+  url: string | null;
 }
 
 export interface NewsSnapshot {
@@ -74,6 +74,18 @@ function isZetUrl(value: unknown): value is string {
   }
 }
 
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > MAX_NEWS_URL_LENGTH) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function isSafeSummaryHtml(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -102,17 +114,20 @@ function isSafeSummaryHtml(value: unknown): value is string {
 
 function isNewsItem(value: unknown): value is NewsItem {
   if (!isRecord(value)) return false;
+  const kind = value.kind;
   return (
     typeof value.id === "string" &&
     value.id.length > 0 &&
     value.id.length <= MAX_NEWS_ID_LENGTH &&
-    (value.kind === "traffic" || value.kind === "news") &&
+    (kind === "traffic" || kind === "news" || kind === "app") &&
     isNewsTimestamp(value.publishedAt) &&
     typeof value.title === "string" &&
     value.title.length > 0 &&
     value.title.length <= MAX_NEWS_TITLE_LENGTH &&
     isSafeSummaryHtml(value.summaryHtml) &&
-    isZetUrl(value.url)
+    (kind === "app"
+      ? value.url === null || isHttpsUrl(value.url)
+      : isZetUrl(value.url))
   );
 }
 
@@ -211,6 +226,17 @@ function formatDate(timestamp: number): string {
   }).format(new Date(timestamp * 1000));
 }
 
+function newsKindLabel(kind: NewsKind): string {
+  switch (kind) {
+    case "traffic":
+      return "ZET · Promet";
+    case "news":
+      return "ZET · Obavijesti";
+    case "app":
+      return "Aplikacija";
+  }
+}
+
 export const NewsOverlay = memo(function NewsOverlay({
   snapshot,
   state,
@@ -229,7 +255,7 @@ export const NewsOverlay = memo(function NewsOverlay({
     >
       <div className="news-overlay">
         <div className="news-header">
-          <h3>Obavijesti ZET-a</h3>
+          <h3>Obavijesti</h3>
           <button
             className="news-close-button"
             type="button"
@@ -252,12 +278,14 @@ export const NewsOverlay = memo(function NewsOverlay({
                 key={item.id}
                 className={`news-item news-item-${item.kind}`}
               >
-                <div className="news-item-kind">
-                  {item.kind === "traffic" ? "Promet" : "Vijesti"}
-                </div>
-                <a href={item.url} target="_blank" rel="noopener noreferrer">
-                  {item.title}
-                </a>
+                <div className="news-item-kind">{newsKindLabel(item.kind)}</div>
+                {item.url ? (
+                  <a href={item.url} target="_blank" rel="noopener noreferrer">
+                    {item.title}
+                  </a>
+                ) : (
+                  <div className="news-item-title">{item.title}</div>
+                )}
                 <time>{formatDate(item.publishedAt)}</time>
                 {item.summaryHtml && (
                   <div
@@ -291,7 +319,7 @@ export class NewsControl {
     button.type = "button";
     button.className = "maplibregl-ctrl-icon";
     button.innerHTML = newsIconSvg;
-    button.title = "Obavijesti ZET-a";
+    button.title = "Obavijesti";
     button.setAttribute("aria-label", button.title);
     button.addEventListener("click", this.onShow);
     this.button = button;

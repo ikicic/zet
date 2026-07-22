@@ -71,18 +71,32 @@
   background: #fff4df;
 }
 
+.news-item-app {
+  border-color: #d4c4eb;
+  border-left-color: #7652a8;
+  background: #f5f0fb;
+}
+
 .news-item-kind,
 .news-item time {
   color: #555;
   font-size: 0.8em;
 }
 
-.news-item a {
+.news-item a,
+.news-item-title {
   display: block;
-  color: #173f66;
   font-weight: bold;
   margin: 2px 0;
+}
+
+.news-item a {
+  color: #173f66;
   text-decoration: none;
+}
+
+.news-item-title {
+  color: #222;
 }
 
 .news-item a:hover {

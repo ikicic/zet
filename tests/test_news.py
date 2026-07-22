@@ -1,9 +1,12 @@
 from email.message import Message
-import json
 from unittest.mock import patch
-import unittest
 from urllib.error import HTTPError
 from urllib.request import Request
+import datetime
+import json
+import os
+import tempfile
+import unittest
 
 from zet.webserver.news import (
     MAX_NEWS_TIMESTAMP,
@@ -110,6 +113,110 @@ class NewsHtmlTest(unittest.TestCase):
 
 
 class NewsFeedParsingTest(unittest.TestCase):
+    def test_parse_app_news_escapes_plain_text_and_allows_optional_url(self) -> None:
+        published = '2026-07-22T18:30:00+02:00'
+        raw_items = [
+            {
+                'publishedAt': published,
+                'title': '  Stanje   aplikacije  ',
+                'summary': 'Prvi red\n<script>alert(1)</script>',
+                'url': None,
+            },
+            {
+                'publishedAt': '2026-07-22T19:00:00+02:00',
+                'title': 'Više informacija',
+                'summary': '',
+                'url': 'https://status.example.com/notice',
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'app_news.json')
+            with open(path, 'w', encoding='utf-8') as file:
+                json.dump(raw_items, file)
+
+            items = NewsCache._parse_app_news(path)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].kind, 'app')
+        self.assertEqual(items[0].title, 'Stanje aplikacije')
+        self.assertEqual(
+            items[0].published_at,
+            int(datetime.datetime.fromisoformat(published).timestamp()))
+        self.assertEqual(
+            items[0].summary_html,
+            'Prvi red<br>&lt;script&gt;alert(1)&lt;/script&gt;')
+        self.assertIsNone(items[0].url)
+        self.assertEqual(items[0].to_json()['url'], None)
+        self.assertEqual(items[1].url, 'https://status.example.com/notice')
+
+    def test_parse_app_news_rejects_invalid_items(self) -> None:
+        invalid_items = {
+            'non-array root': ({}, 'JSON array'),
+            'missing timezone': ([{
+                'publishedAt': '2026-07-22T18:30:00',
+                'title': 'Title',
+            }], 'timezone'),
+            'unsafe URL': ([{
+                'publishedAt': '2026-07-22T18:30:00+02:00',
+                'title': 'Title',
+                'url': 'javascript:alert(1)',
+            }], 'HTTPS URL'),
+            'unknown field': ([{
+                'publishedAt': '2026-07-22T18:30:00+02:00',
+                'title': 'Title',
+                'summaryHtml': '<strong>unsafe input field</strong>',
+            }], 'unknown fields'),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'app_news.json')
+            for name, (raw_items, message) in invalid_items.items():
+                with self.subTest(name=name):
+                    with open(path, 'w', encoding='utf-8') as file:
+                        json.dump(raw_items, file)
+                    with self.assertRaisesRegex(ValueError, message):
+                        NewsCache._parse_app_news(path)
+
+    def test_failed_app_news_read_keeps_last_good_items(self) -> None:
+        app_item = NewsItem(
+            'app', 'app', 3, 'App', 'Summary', None)
+        cache = NewsCache('/unused/app_news.json')
+        with patch.object(NewsCache, '_parse_feed', side_effect=[[], []]), \
+                patch.object(
+                    NewsCache, '_parse_app_news', return_value=[app_item]):
+            self.assertTrue(cache.refresh())
+        with patch.object(NewsCache, '_parse_feed', side_effect=[[], []]), \
+                patch.object(
+                    NewsCache, '_parse_app_news', side_effect=ValueError('bad file')):
+            self.assertFalse(cache.refresh())
+
+        self.assertEqual(cache._items_by_kind['app'], [app_item])
+        self.assertEqual(cache._items, [app_item])
+
+    def test_missing_default_app_news_file_is_an_empty_category(self) -> None:
+        cache = NewsCache()
+        cache._app_news_path = '/missing/default/app_news.json'
+        cache._app_news_path_is_explicit = False
+        with patch.object(NewsCache, '_parse_feed', side_effect=[[], []]), \
+                patch.object(
+                    NewsCache, '_parse_app_news',
+                    side_effect=FileNotFoundError('missing')), \
+                patch('zet.webserver.news.logger.warning') as warning:
+            self.assertTrue(cache.refresh())
+
+        self.assertEqual(cache._items_by_kind['app'], [])
+        warning.assert_not_called()
+
+    def test_missing_configured_app_news_file_logs_a_warning(self) -> None:
+        cache = NewsCache('/missing/configured/app_news.json')
+        with patch.object(NewsCache, '_parse_feed', side_effect=[[], []]), \
+                patch.object(
+                    NewsCache, '_parse_app_news',
+                    side_effect=FileNotFoundError('missing')), \
+                patch('zet.webserver.news.logger.warning') as warning:
+            self.assertTrue(cache.refresh())
+
+        warning.assert_called_once()
+
     def test_parse_feed_sanitizes_description_and_skips_invalid_items(self) -> None:
         feed = b'''<?xml version="1.0"?>
             <rss><channel>
