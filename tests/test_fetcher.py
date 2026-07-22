@@ -13,6 +13,7 @@ class FetcherPollingTest(unittest.TestCase):
         fetcher.running = True
         fetcher.store_realtime_snapshot = Mock(side_effect=snapshot_results)
         fetcher.maybe_fetch_static = Mock(return_value=False)
+        fetcher.close = Mock()
 
         delays = []
 
@@ -27,6 +28,65 @@ class FetcherPollingTest(unittest.TestCase):
             fetcher.run()
 
         return delays
+
+    def test_ctrl_c_only_requests_shutdown(self) -> None:
+        fetcher = Fetcher.__new__(Fetcher)
+        fetcher.running = True
+        fetcher.close = Mock()
+
+        fetcher.handle_sigint(None, None)
+
+        self.assertFalse(fetcher.running)
+        fetcher.close.assert_not_called()
+
+    def test_fetch_result_is_not_processed_after_ctrl_c(self) -> None:
+        fetcher = Fetcher.__new__(Fetcher)
+        fetcher.realtime_url = 'https://example.invalid/realtime'
+        fetcher.static_url = 'https://example.invalid/static'
+        fetcher.realtime_dt = 10
+        fetcher.running = True
+        fetcher.store_realtime_snapshot = Mock()
+        fetcher.maybe_fetch_static = Mock()
+        fetcher.sleep = Mock()
+        fetcher.close = Mock()
+
+        def interrupt_during_fetch(url: str) -> bytes:
+            fetcher.running = False
+            return b'data'
+
+        with patch(
+                'zet.fetcher.fetcher.try_fetch_url',
+                side_effect=interrupt_during_fetch):
+            fetcher.run()
+
+        fetcher.store_realtime_snapshot.assert_not_called()
+        fetcher.maybe_fetch_static.assert_not_called()
+        fetcher.sleep.assert_not_called()
+        fetcher.close.assert_called_once_with()
+
+    def test_static_fetch_is_not_started_after_ctrl_c(self) -> None:
+        fetcher = Fetcher.__new__(Fetcher)
+        fetcher.realtime_url = 'https://example.invalid/realtime'
+        fetcher.static_url = 'https://example.invalid/static'
+        fetcher.realtime_dt = 10
+        fetcher.running = True
+        fetcher.maybe_fetch_static = Mock()
+        fetcher.sleep = Mock()
+        fetcher.close = Mock()
+
+        def interrupt_while_storing(data: bytes) -> bool:
+            fetcher.running = False
+            return True
+
+        fetcher.store_realtime_snapshot = Mock(
+            side_effect=interrupt_while_storing)
+
+        with patch('zet.fetcher.fetcher.try_fetch_url', return_value=b'data'):
+            fetcher.run()
+
+        fetcher.maybe_fetch_static.assert_not_called()
+        fetcher.sleep.assert_not_called()
+        fetcher.close.assert_called_once_with()
 
     def test_unchanged_snapshot_delay_grows_gradually(self) -> None:
         delays = self.run_fetcher([False, False, False])

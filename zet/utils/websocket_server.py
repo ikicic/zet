@@ -21,6 +21,9 @@ class WebSocketServer:
         self.data: OrderedDict[str, list[Data]] = OrderedDict(
             {kind: [] for kind in kinds_order})
         self.loop = None  # Store the event loop reference
+        self.loop_lock = threading.Lock()
+        self.loop_ready = threading.Event()
+        self.stop_requested = threading.Event()
 
         # Start WebSocket server in a separate thread
         self.ws_thread = threading.Thread(target=self.start_ws_server, daemon=True)
@@ -30,26 +33,48 @@ class WebSocketServer:
         """Start the WebSocket server in the current thread."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        with self.loop_lock:
+            self.loop = loop
 
-        async def start_server_coroutine():
+        async def run_server_coroutine():
             # Serve only to localhost.
             self.ws_server = await websockets.serve(
-                self._handle_client, 'localhost', self.ws_port)
+                self._handle_client, 'localhost', self.ws_port,
+                close_timeout=2)
             logger.info(f"WebSocket server started on port {self.ws_port}")
+            self.loop_ready.set()
 
-        loop.run_until_complete(start_server_coroutine())
-        self.loop = loop
-        loop.run_forever()
+            try:
+                while not self.stop_requested.is_set():
+                    await asyncio.sleep(0.1)
+            finally:
+                self.ws_server.close()
+                await self.ws_server.wait_closed()
+
+        try:
+            loop.run_until_complete(run_server_coroutine())
+        finally:
+            self.loop_ready.set()
+            self.ws_server = None
+            with self.loop_lock:
+                self.loop = None
+                pending_tasks = asyncio.all_tasks(loop)
+                for task in pending_tasks:
+                    task.cancel()
+                if pending_tasks:
+                    loop.run_until_complete(asyncio.gather(
+                        *pending_tasks, return_exceptions=True))
+                loop.close()
 
     def close(self):
         """Close the WebSocket server."""
         logger.info("Closing WebSocket server...")
-        if self.ws_server:
-            self.ws_server.close()
-            self.ws_server = None
+        self.stop_requested.set()
 
         if self.ws_thread.is_alive():
             self.ws_thread.join(timeout=5)
+            if self.ws_thread.is_alive():
+                logger.warning("Timed out stopping WebSocket server thread")
 
     def update_data(self, key: str, data: Data, max_history: int):
         """Update the current data in a thread-safe manner.
@@ -116,13 +141,23 @@ class WebSocketServer:
                 return
             data = data[-1]
 
-        # Use the stored event loop reference instead of trying to get the
-        # current one
-        if self.loop and self.loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self._notify_all_clients_async(data), self.loop)
-        else:
-            logger.warning(f"Event loop not running, dropping notification for key: {key}")
+        with self.loop_lock:
+            loop = self.loop
+            if self.stop_requested.is_set():
+                return
+            if loop is None or not loop.is_running():
+                logger.warning(
+                    f"Event loop not running, dropping notification for key: {key}")
+                return
+
+            notification = self._notify_all_clients_async(data)
+            try:
+                asyncio.run_coroutine_threadsafe(notification, loop)
+            except RuntimeError as e:
+                # Avoid leaking the coroutine if submission is rejected.
+                notification.close()
+                logger.warning(
+                    f"Failed to submit notification for key {key}: {e}")
 
     async def _notify_all_clients_async(self, data: Data):
         """Async method to notify all clients."""

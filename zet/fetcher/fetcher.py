@@ -317,18 +317,19 @@ class Fetcher:
     def close_database(self):
         if self.db_conn:
             self.db_conn.close()
+            self.db_conn = None
             logger.info(f"Database connection closed: {self.db_path}")
+
+    def close(self):
+        """Close resources owned by the fetcher."""
+        self.close_database()
+        if self.ws_server:
+            self.ws_server.close()
 
     def handle_sigint(self, sig, frame):
         """Handle Ctrl-C."""
         logger.info("Shutting down the fetcher...")
         self.running = False
-
-        # First close the database, because closing ws_server might hang.
-        self.close_database()
-
-        if self.ws_server:
-            self.ws_server.close()
 
     def run(self):
         """Main loop to fetch and store snapshots."""
@@ -339,35 +340,47 @@ class Fetcher:
         unchanged_delay = MIN_UNCHANGED_DELAY
         current_delay = unchanged_delay
 
-        while self.running:
-            data = try_fetch_url(self.realtime_url)
-            if data is not None:
-                new_snapshot = self.store_realtime_snapshot(data)
-                if new_snapshot:
-                    current_delay = long_delay
-                    unchanged_delay = MIN_UNCHANGED_DELAY
+        try:
+            while self.running:
+                data = try_fetch_url(self.realtime_url)
+                if not self.running:
+                    break
+
+                if data is not None:
+                    new_snapshot = self.store_realtime_snapshot(data)
+                    if new_snapshot:
+                        current_delay = long_delay
+                        unchanged_delay = MIN_UNCHANGED_DELAY
+                    else:
+                        current_delay = unchanged_delay
+                        unchanged_delay = min(
+                            unchanged_delay * UNCHANGED_BACKOFF_FACTOR,
+                            MAX_UNCHANGED_DELAY)
+
+                    if not self.running:
+                        break
+
+                    if self.maybe_fetch_static():
+                        # Downloading the static data may take a few seconds,
+                        # so we don't wait before reloading the realtime data.
+                        current_delay = 0
                 else:
-                    current_delay = unchanged_delay
-                    unchanged_delay = min(
-                        unchanged_delay * UNCHANGED_BACKOFF_FACTOR,
-                        MAX_UNCHANGED_DELAY)
+                    logger.error("No data fetched. Skipping snapshot.")
+                    # If fetching failed, use exponential backoff
+                    current_delay = min(current_delay * 2, 20)
 
-                if self.maybe_fetch_static():
-                    # Downloading the static data may take a few seconds,
-                    # so we don't wait before reloading the realtime data.
-                    current_delay = 0
-            else:
-                logger.error("No data fetched. Skipping snapshot.")
-                # If fetching failed, use exponential backoff
-                current_delay = min(current_delay * 2, 20)
-
-            self.sleep(current_delay)
+                self.sleep(current_delay)
+        finally:
+            self.close()
 
     def maybe_fetch_static(self) -> bool:
         """Check if the static data is outdated and fetch it if needed.
 
         Returns True if the static data was fetched, False otherwise.
         """
+        if not self.running:
+            return False
+
         now = datetime.datetime.now()
         should_fetch = (self._last_static_fetch is None or
                         now - self._last_static_fetch >
@@ -377,7 +390,7 @@ class Fetcher:
 
         self._last_static_fetch = now
         data = try_fetch_url(self.static_url)
-        if data is not None:
+        if self.running and data is not None:
             self.store_static_snapshot(data)
         return True
 
