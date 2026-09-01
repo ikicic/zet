@@ -53,7 +53,7 @@ module.exports = (env, argv) => ({
     ],
     proxy: [
       {
-        context: ["/static", "/api", "/news", "/ws-v2", "/ws-v3"],
+        context: ["/static", "/api", "/news", "/ws-v2", "/ws-v3", "/ws-v4"],
         target: "http://127.0.0.1:5000",
         ws: true,
         changeOrigin: true,

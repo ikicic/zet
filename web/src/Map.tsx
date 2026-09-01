@@ -41,8 +41,9 @@ import {
 } from "./News";
 import { useLocalStorage } from "./useLocalStorage";
 
-const PERFORMANCE_MODE =
-  new URLSearchParams(window.location.search).get("perf") === "1";
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const PERFORMANCE_MODE = URL_PARAMS.get("perf") === "1";
+const STRESS_MODE = __DEV__ && URL_PARAMS.get("stress") === "1";
 const LOCATION_TRACKING_ENABLED_KEY = "zet-location-tracking-enabled";
 
 function getLocationTrackingEnabled(): boolean {
@@ -310,6 +311,7 @@ export function Map() {
     }
 
     let isUnmounted = false;
+    let stressAnimationFrame: number | null = null;
     const shouldRestoreLocationTracking = getLocationTrackingEnabled();
     const geolocationPermission = shouldRestoreLocationTracking
       ? navigator.permissions
@@ -334,6 +336,20 @@ export function Map() {
       rollEnabled: false,
       boxZoom: false,
     }));
+    if (STRESS_MODE) {
+      const animationStart = performance.now();
+      const animateMap = (now: number) => {
+        const phase = ((now - animationStart) / 8000) * Math.PI * 2;
+        map.jumpTo({
+          center: [
+            center[0] + 0.004 * Math.sin(phase),
+            center[1] + 0.002 * Math.cos(phase),
+          ],
+        });
+        stressAnimationFrame = requestAnimationFrame(animateMap);
+      };
+      stressAnimationFrame = requestAnimationFrame(animateMap);
+    }
     if (PERFORMANCE_MODE) {
       setPerfMap(map);
     }
@@ -533,6 +549,9 @@ export function Map() {
     // Cleanup
     return () => {
       isUnmounted = true;
+      if (stressAnimationFrame !== null) {
+        cancelAnimationFrame(stressAnimationFrame);
+      }
       if (vehicleLayerRef.current) {
         vehicleLayerRef.current.destroy();
       }
