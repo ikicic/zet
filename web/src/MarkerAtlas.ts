@@ -989,6 +989,24 @@ export function openAtlasDebugOverlay(atlas: MarkerAtlas) {
 
   const liveCtx = liveCanvas.getContext("2d")!;
   const refresh = () => {
+    if (
+      liveCanvas.width !== atlas.canvas.width ||
+      liveCanvas.height !== atlas.canvas.height
+    ) {
+      const wasAtRightEdge =
+        viewport.scrollLeft + viewport.clientWidth >= viewport.scrollWidth - 1;
+      const wasAtBottom =
+        viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1;
+
+      liveCanvas.width = atlas.canvas.width;
+      liveCanvas.height = atlas.canvas.height;
+      liveCanvas.style.width = `${atlas.canvas.width / atlas.dpr}px`;
+      liveCanvas.style.height = `${atlas.canvas.height / atlas.dpr}px`;
+      heading.textContent = `Live atlas (${atlas.canvas.width}x${atlas.canvas.height})`;
+
+      if (wasAtRightEdge) viewport.scrollLeft = viewport.scrollWidth;
+      if (wasAtBottom) viewport.scrollTop = viewport.scrollHeight;
+    }
     drawDebugBackdrop(liveCtx, liveCanvas.width, liveCanvas.height);
     liveCtx.drawImage(atlas.canvas, 0, 0);
   };
