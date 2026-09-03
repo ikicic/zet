@@ -82,6 +82,9 @@ void main() {
 //               flipX, flipY, r, g, b, a = 14 floats.
 const FLOATS_PER_INSTANCE = 14;
 const BYTES_PER_INSTANCE = FLOATS_PER_INSTANCE * 4;
+// Work around a Samsung Xclipse driver bug that zeroes attributes at non-zero
+// offsets for the final record of an exact-fit ARRAY_BUFFER allocation.
+const BUFFER_PADDING_FLOATS = 16; // 64 bytes
 
 function compileShader(gl: GL, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type)!;
@@ -157,7 +160,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
 
   /** Begin a new frame. Reserves capacity for up to `maxInstances`. */
   beginFrame(maxInstances: number) {
-    const needed = maxInstances * FLOATS_PER_INSTANCE;
+    const needed = maxInstances * FLOATS_PER_INSTANCE + BUFFER_PADDING_FLOATS;
     if (this.instanceData.length < needed) {
       this.instanceData = new Float32Array(
         Math.max(needed, this.instanceData.length * 2),
@@ -294,9 +297,11 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     }
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+    const usedFloats = count * FLOATS_PER_INSTANCE;
+    this.instanceData.fill(0, usedFloats, usedFloats + BUFFER_PADDING_FLOATS);
     gl.bufferData(
       gl.ARRAY_BUFFER,
-      this.instanceData.subarray(0, count * FLOATS_PER_INSTANCE),
+      this.instanceData.subarray(0, usedFloats + BUFFER_PADDING_FLOATS),
       gl.DYNAMIC_DRAW,
     );
 
