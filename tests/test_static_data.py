@@ -1,6 +1,7 @@
 import datetime
 import gzip
 import io
+from itertools import accumulate
 import json
 import unittest
 import zipfile
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 from google.transit import gtfs_realtime_pb2
 
-from zet.webserver.webserver import GtfsServer, StaticData
+from zet.webserver.webserver import GtfsServer, StaticData, STATIC_REFERENCE_SYSTEM
 
 
 def make_archive(route_id: int, date: str = '20260103') -> bytes:
@@ -31,6 +32,23 @@ def load_archive(server: GtfsServer, raw: bytes, mtime: int = 0) -> None:
     server._process_static_data({
         'gzipped_data': gzip.compress(raw, mtime=mtime).hex(),
     })
+
+
+class CoordinateCompressionTest(unittest.TestCase):
+    def test_negative_steps_and_return_to_origin(self):
+        self.assertEqual(STATIC_REFERENCE_SYSTEM.compress_lats(
+            [45.815, 45.814990, 45.814980, 45.815]), [0, -10, -10, 20])
+        self.assertEqual(STATIC_REFERENCE_SYSTEM.compress_lons(
+            [15.9819, 15.981890, 15.981880, 15.9819]), [0, -10, -10, 20])
+
+    def test_rounding_error_does_not_accumulate(self):
+        for step in (-0.0000004, 0.0000004):
+            values = [45.815 + i * step for i in range(2000)]
+            offsets = accumulate(STATIC_REFERENCE_SYSTEM.compress_lats(values))
+            for original, offset in zip(values, offsets):
+                decoded = 45.815 + offset * 1e-6
+                self.assertLessEqual(abs(decoded - original), 0.5001e-6)
+        self.assertEqual(STATIC_REFERENCE_SYSTEM.compress_lats([]), [])
 
 
 class StaticSnapshotTest(unittest.TestCase):

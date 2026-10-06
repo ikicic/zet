@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -60,11 +60,9 @@ class StaticReferenceSystem:
 
     def _compress_coord(self, ref_value: float, values: list[float]) -> list[int]:
         factor = 10 ** self.coord_num_digits
-        out = []
-        for v in values:
-            out.append(int((v - ref_value) * factor + 0.5))
-            ref_value = v
-        return out
+        # Round absolute offsets before differencing. Rounding each step would
+        # accumulate error, especially for negative coordinate changes.
+        return _encode_deltas(round((v - ref_value) * factor) for v in values)
 
     def compress_lats(self, lat: list[float]) -> list[int]:
         return self._compress_coord(self.ref_lat, lat)
@@ -350,6 +348,15 @@ class GtfsShape:
                 ref.compress_lats(shape.lats) for shape in shapes],
             'compressedLons': [ref.compress_lons(shape.lons) for shape in shapes],
         }
+
+
+def _encode_deltas(values: Iterable[int]) -> list[int]:
+    previous = 0
+    deltas = []
+    for value in values:
+        deltas.append(value - previous)
+        previous = value
+    return deltas
 
 
 @dataclass

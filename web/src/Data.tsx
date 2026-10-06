@@ -75,14 +75,8 @@ class StaticReferenceSystem {
   }
 
   _decompress_coords(ref_value: number, coords: number[]): number[] {
-    const out = [];
     const inv_scale = Math.pow(10, -this.coord_num_digits);
-    for (const coord of coords) {
-      const value = ref_value + coord * inv_scale;
-      out.push(value);
-      ref_value = value;
-    }
-    return out;
+    return decodeDeltas(coords).map((offset) => ref_value + offset * inv_scale);
   }
 
   decompress_lats(lats: number[]): number[] {
@@ -119,6 +113,11 @@ export function decompressRealTimeState(
     timestamp: data.timestamp,
     activeStaticKey: data.activeStaticKey,
   };
+}
+
+function decodeDeltas(deltas: number[]): number[] {
+  let value = 0;
+  return deltas.map((delta) => (value += delta));
 }
 
 export function decompressBigStaticData(
