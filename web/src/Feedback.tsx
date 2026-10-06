@@ -2,8 +2,14 @@ import { useState } from "react";
 import { getHttpUrl } from "./url";
 import "./Feedback.css";
 
-export function FeedbackForm() {
-  const [message, setMessage] = useState("");
+export function FeedbackForm({
+  initialMessage = "",
+  title = "Povratna informacija",
+}: {
+  initialMessage?: string;
+  title?: string;
+}) {
+  const [message, setMessage] = useState(() => initialMessage.slice(0, 1000));
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<{
@@ -54,7 +60,7 @@ export function FeedbackForm() {
 
   return (
     <div className="feedback-form">
-      <h4>Povratna informacija</h4>
+      <h4>{title}</h4>
       {status && (
         <div className={`feedback-status feedback-status-${status.type}`}>
           {status.text}
@@ -62,6 +68,7 @@ export function FeedbackForm() {
       )}
       <textarea
         className="feedback-textarea"
+        aria-label="Poruka"
         placeholder="Vaša poruka..."
         value={message}
         onChange={(e) => setMessage(e.target.value)}
@@ -71,6 +78,7 @@ export function FeedbackForm() {
       <input
         className="feedback-email"
         type="email"
+        aria-label="E-mail (ako želite odgovor)"
         placeholder="E-mail (ako želite odgovor)"
         value={email}
         onChange={(e) => setEmail(e.target.value)}

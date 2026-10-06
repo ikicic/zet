@@ -4,14 +4,7 @@
 import maplibregl from "maplibre-gl";
 import { MarkerAtlas, AtlasEntry } from "./MarkerAtlas";
 
-type GL = WebGLRenderingContext | WebGL2RenderingContext;
-
-function isWebGL2(gl: GL): gl is WebGL2RenderingContext {
-  return (
-    typeof WebGL2RenderingContext !== "undefined" &&
-    gl instanceof WebGL2RenderingContext
-  );
-}
+type GL = WebGL2RenderingContext;
 
 /**
  * Canvas uploads can be premultiplied by WebGL, but typed-array uploads
@@ -201,9 +194,6 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   }
 
   onAdd(_map: maplibregl.Map, gl: GL) {
-    if (!isWebGL2(gl)) {
-      throw new Error("WebGLMarkerRenderer requires WebGL2");
-    }
     this.gl = gl;
 
     if (__DEV__) {
@@ -274,14 +264,13 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     this.atlasTexture = null;
   }
 
-  render(gl: GL, _options: maplibregl.CustomRenderMethodInput) {
-    if (
-      !isWebGL2(gl) ||
-      !this.program ||
-      !this.vao ||
-      !this.instanceBuffer ||
-      !this.atlas
-    ) {
+  render(
+    context: WebGLRenderingContext | WebGL2RenderingContext,
+    _options: maplibregl.CustomRenderMethodInput,
+  ) {
+    // Map initialization requires WebGL2.
+    const gl = context as GL;
+    if (!this.program || !this.vao || !this.instanceBuffer || !this.atlas) {
       return;
     }
 

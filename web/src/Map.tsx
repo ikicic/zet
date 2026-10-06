@@ -23,6 +23,7 @@ import {
 } from "./Filter";
 import { InfoControl, InfoOverlay } from "./Info";
 import "./Map.css";
+import { MapUnavailable } from "./MapUnavailable";
 import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
@@ -126,6 +127,7 @@ export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const mapLoadedRef = useRef<boolean>(false);
+  const [mapUnavailable, setMapUnavailable] = useState(false);
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [showFilter, setShowFilter] = useState<boolean>(false);
 
@@ -314,22 +316,33 @@ export function Map() {
       : undefined;
 
     const center: [number, number] = [15.9819, 45.815];
-    const map = (mapRef.current = new maplibregl.Map({
-      container: mapContainer.current,
-      style: "/style.json",
-      center: center,
-      zoom: 12,
-      minZoom: 9,
-      maxZoom: 18,
-      maxBounds: [
-        [center[0] - 0.5, center[1] - 0.27],
-        [center[0] + 0.5, center[1] + 0.22],
-      ],
-      dragRotate: false,
-      pitchWithRotate: false,
-      rollEnabled: false,
-      boxZoom: false,
-    }));
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: mapContainer.current,
+        style: "/style.json",
+        canvasContextAttributes: { contextType: "webgl2" },
+        center: center,
+        zoom: 12,
+        minZoom: 9,
+        maxZoom: 18,
+        maxBounds: [
+          [center[0] - 0.5, center[1] - 0.27],
+          [center[0] + 0.5, center[1] + 0.22],
+        ],
+        dragRotate: false,
+        pitchWithRotate: false,
+        rollEnabled: false,
+        boxZoom: false,
+      });
+    } catch (error) {
+      console.error("Map initialization failed", error);
+      mapContainer.current.replaceChildren();
+      setMapUnavailable(true);
+      return;
+    }
+    mapRef.current = map;
+    setMapUnavailable(false);
     if (STRESS_MODE) {
       const animationStart = performance.now();
       const animateMap = (now: number) => {
@@ -553,6 +566,8 @@ export function Map() {
         map.off("resize", updateMapCanvasDpr);
       }
       map.remove();
+      mapRef.current = null;
+      mapLoadedRef.current = false;
       newsControlRef.current = null;
     };
   }, []);
@@ -598,8 +613,12 @@ export function Map() {
   }, [activeStaticKey, loadedSmallStaticData]);
 
   // WebSocket connection and updates with reconnection logic.
-  // Start immediately, don't wait for map to load.
+  // Start once the map is initialized, without waiting for its style to load.
   useEffect(() => {
+    if (!mapRef.current) {
+      return;
+    }
+
     let ws: WebSocket | null = null;
     let reconnectAttempts = 0;
     let isMounted = true; // Flag to track if component is still mounted
@@ -702,6 +721,10 @@ export function Map() {
       );
     }
   }, [filterState]);
+
+  if (mapUnavailable) {
+    return <MapUnavailable />;
+  }
 
   return (
     <>
