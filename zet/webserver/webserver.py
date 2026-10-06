@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
+from zoneinfo import ZoneInfo
 import argparse
 import asyncio
 import csv
@@ -496,11 +497,13 @@ class GtfsServer:
         if feed is None:
             return None, None
 
-        today = datetime.date.today()
+        # Match the feed's date, including when replaying historical data.
+        feed_date = datetime.datetime.fromtimestamp(
+            feed.timestamp, ZoneInfo('Europe/Zagreb')).date()
         with self.update_lock:
             active_static_snapshot = None
             for snapshot in self.recent_static_snapshots[::-1]:
-                if today in snapshot.static_data.calendar_dates:
+                if feed_date in snapshot.static_data.calendar_dates:
                     active_static_snapshot = snapshot
                     break
             self.realtime_state.update(feed, active_static_snapshot)
