@@ -6,6 +6,7 @@ import asyncio
 import csv
 import datetime
 import gzip
+import hashlib
 import io
 import json
 import logging
@@ -360,6 +361,10 @@ class StaticData:
 
     @staticmethod
     def from_gzipped_data(gzipped_data: bytes) -> 'StaticData':
+        return StaticData.from_zip_data(gzip.decompress(gzipped_data))
+
+    @staticmethod
+    def from_zip_data(raw_data: bytes) -> 'StaticData':
         trip_to_shape_id: dict[str, str] = {}
 
         # The shape points in the shapes.txt do not necessarily have to come
@@ -369,7 +374,6 @@ class StaticData:
 
         calendar_dates: set[datetime.date] = set()
 
-        raw_data = gzip.decompress(gzipped_data)
         with zipfile.ZipFile(io.BytesIO(raw_data)) as zip_file:
             with zip_file.open('trips.txt') as file:
                 csv_lines = file.read().decode('utf-8').splitlines()
@@ -534,9 +538,15 @@ class GtfsServer:
     def _process_static_data(self, data: dict):
         logger.info("Processing static data.")
         try:
-            key = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')
-            static_data = StaticData.from_gzipped_data(
-                bytes.fromhex(data['gzipped_data']))
+            raw_data = gzip.decompress(bytes.fromhex(data['gzipped_data']))
+            # Hash the ZIP itself: gzip headers may change across downloads.
+            # Keep this stable across restarts for the cacheable static URLs.
+            # A future response schema change must version the URL or key.
+            key = hashlib.sha256(raw_data).hexdigest()[:32]
+            with self.update_lock:
+                if any(s.key == key for s in self.recent_static_snapshots):
+                    return
+            static_data = StaticData.from_zip_data(raw_data)
             json_data_big = static_data.big_to_json(STATIC_REFERENCE_SYSTEM)
             json_data_small = static_data.small_to_json()
             snapshot = StaticDataSnapshot(
@@ -546,6 +556,9 @@ class GtfsServer:
                 formatted_json_small=compact_json(json_data_small),
             )
             with self.update_lock:
+                # Another caller may have loaded the same archive meanwhile.
+                if any(s.key == key for s in self.recent_static_snapshots):
+                    return
                 self.recent_static_snapshots.append(snapshot)
                 while (len(self.recent_static_snapshots) >
                        self.MAX_RECENT_STATIC_SNAPSHOTS):
