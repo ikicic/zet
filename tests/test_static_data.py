@@ -12,7 +12,8 @@ from google.transit import gtfs_realtime_pb2
 from zet.webserver.webserver import GtfsServer, StaticData, STATIC_REFERENCE_SYSTEM
 
 
-def make_archive(route_id: int, date: str = '20260103') -> bytes:
+def make_archive(route_id: int, date: str = '20260103',
+                 overrides: dict[str, str] | None = None) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
         files = {
@@ -22,7 +23,12 @@ def make_archive(route_id: int, date: str = '20260103') -> bytes:
                 'shape,45.815,15.9819,1\n'),
             'calendar_dates.txt': f'date\n{date}\n',
             'routes.txt': f'route_id\n{route_id}\n',
+            'stops.txt': ('stop_id,stop_lat,stop_lon\n'
+                          'a,45.815,15.9819\nb,45.816,15.9829\n'),
+            'stop_times.txt': ('trip_id,stop_id,stop_sequence\n'
+                               'trip,b,20\ntrip,a,10\n'),
         }
+        files.update(overrides or {})
         for name, content in files.items():
             archive.writestr(name, content)
     return buffer.getvalue()
@@ -55,6 +61,106 @@ class StaticSnapshotTest(unittest.TestCase):
     def setUp(self) -> None:
         # Construction starts no threads and makes no network requests.
         self.server = GtfsServer('ws://example.invalid')
+
+    def test_stops_are_ordered_and_shared_between_shapes(self):
+        data = StaticData.from_zip_data(make_archive(6, overrides={
+            'trips.txt': ('trip_id,shape_id\ntrip,shape\n'
+                          'return,reverse\nrepeat,shape\nunknown,\n'),
+            'shapes.txt': ('shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n'
+                           'shape,45.815,15.9819,1\n'
+                           'reverse,45.816,15.9829,1\n'),
+            'stop_times.txt': ('trip_id,stop_id,stop_sequence\n'
+                               'trip,b,20\ntrip,a,10\n'
+                               'return,a,2\nreturn,b,1\n'
+                               'repeat,a,1\nrepeat,b,2\nunknown,a,1\n'),
+        }))
+        payload = data.big_to_json(STATIC_REFERENCE_SYSTEM)
+        self.assertNotIn('ids', payload['stops'])
+        self.assertEqual(payload['stops']['latDeltas'], [0, 1000])
+        self.assertEqual(payload['stops']['lonDeltas'], [0, 1000])
+        self.assertEqual(payload['shapes']['ids'], ['shape', 'reverse'])
+        self.assertEqual(payload['shapes']['stopIndexDeltas'], [[0, 1], [1, -1]])
+        self.assertNotIn('', data.shape_stop_ids)
+
+    def test_ambiguous_shape_keeps_geometry_but_omits_stops(self):
+        with self.assertLogs('zet.webserver.webserver', level='WARNING'):
+            data = StaticData.from_zip_data(make_archive(6, overrides={
+                'trips.txt': 'trip_id,shape_id\ntrip,shape\nother,shape\n',
+                'stop_times.txt': ('trip_id,stop_id,stop_sequence\n'
+                                   'trip,a,1\ntrip,b,2\nother,b,1\n'),
+            }))
+        payload = data.big_to_json(STATIC_REFERENCE_SYSTEM)
+        self.assertEqual(payload['shapes']['ids'], ['shape'])
+        self.assertEqual(payload['shapes']['stopIndexDeltas'], [[]])
+
+    def test_interleaved_trips_restart_without_partial_patterns(self):
+        with self.assertLogs('zet.webserver.webserver', level='INFO') as logs:
+            data = StaticData.from_zip_data(make_archive(6, overrides={
+                'trips.txt': 'trip_id,shape_id\ntrip,shape\nother,shape\n',
+                # Columns and rows are intentionally out of order. Both trips
+                # eventually resolve to a,b despite different partial blocks.
+                'stop_times.txt': ('stop_id,stop_sequence,trip_id\n'
+                                   'b,2,trip\na,1,other\na,1,trip\nb,2,other\n'),
+            }))
+        self.assertTrue(any('Interleaved' in line for line in logs.output))
+        self.assertEqual(data.shape_stop_ids, {'shape': ['a', 'b']})
+
+    def test_blank_rows_are_ignored_in_both_parsing_paths(self):
+        for rows in (
+            'trip,a,1\n\ntrip,b,2\nother,a,1\n\nother,b,2\n',
+            'trip,a,1\n\nother,a,1\ntrip,b,2\n\nother,b,2\n',
+        ):
+            with self.subTest(rows=rows):
+                data = StaticData.from_zip_data(make_archive(6, overrides={
+                    'trips.txt': 'trip_id,shape_id\ntrip,shape\nother,shape\n',
+                    'stop_times.txt': '\ntrip_id,stop_id,stop_sequence\n\n' + rows + '\n',
+                }))
+                self.assertEqual(data.shape_stop_ids, {'shape': ['a', 'b']})
+
+    def test_interleaved_trips_still_detect_ambiguous_shapes(self):
+        with self.assertLogs('zet.webserver.webserver', level='WARNING'):
+            data = StaticData.from_zip_data(make_archive(6, overrides={
+                'trips.txt': 'trip_id,shape_id\ntrip,shape\nother,shape\n',
+                'stop_times.txt': ('trip_id,stop_id,stop_sequence\n'
+                                   'trip,a,1\nother,b,1\ntrip,b,2\n'),
+            }))
+        self.assertEqual(data.shape_stop_ids, {})
+
+    def test_stop_deltas_preserve_first_appearance_repeats_and_rounding(self):
+        data = StaticData.from_zip_data(make_archive(6, overrides={
+            'stops.txt': ('stop_id,stop_lat,stop_lon\n'
+                          'a,45.8149994,15.9819006\n'
+                          'z,45.8160004,15.9808996\n'
+                          'm,45.8155004,15.9814004\n'),
+            'stop_times.txt': ('trip_id,stop_id,stop_sequence\n'
+                               'trip,z,1\ntrip,a,2\ntrip,m,3\ntrip,z,4\n'),
+        }))
+        payload = data.big_to_json(STATIC_REFERENCE_SYSTEM)
+        # Table order is z, a, m, not alphabetical; the return to z is -2.
+        self.assertEqual(payload['shapes']['stopIndexDeltas'], [[0, 1, 1, -2]])
+        self.assertEqual(payload['stops']['latDeltas'], [1000, -1001, 501])
+        self.assertEqual(payload['stops']['lonDeltas'], [-1000, 1001, -501])
+
+    def test_missing_stop_coordinates_do_not_prevent_route_loading(self):
+        data = StaticData.from_zip_data(make_archive(6, overrides={
+            'stops.txt': 'stop_id,stop_lat,stop_lon\na,45.815,15.9819\nb,,\n',
+        }))
+        payload = data.big_to_json(STATIC_REFERENCE_SYSTEM)
+        self.assertEqual(payload['stops']['latDeltas'], [0])
+        self.assertEqual(payload['stops']['lonDeltas'], [0])
+        self.assertEqual(payload['shapes']['stopIndexDeltas'], [[0]])
+
+    def test_versioned_static_endpoint_includes_stops(self):
+        import zet.webserver.webserver as webserver
+        load_archive(self.server, make_archive(6))
+        key = self.server.recent_static_snapshots[0].key
+        with patch.object(webserver, 'gtfs_server', self.server):
+            client = webserver.app.test_client()
+            response = client.get(f'/static/big/v1/{key}')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(json.loads(response.data)['shapes']['stopIndexDeltas'], [[0, 1]])
+            self.assertEqual(response.headers['Cache-Control'], 'public, max-age=5184000')
+            self.assertEqual(client.get('/static/big/v1/missing').status_code, 404)
 
     def test_selects_snapshot_for_feed_date_in_zagreb(self):
         for utc_time, local_date in (

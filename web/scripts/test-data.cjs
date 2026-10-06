@@ -19,7 +19,9 @@ const decoded = api.decompressBigStaticData({
     ids: ["route", "empty"],
     compressedLats: [deltas, []],
     compressedLons: [deltas, []],
+    stopIndexDeltas: [[2, -1, -1, 3], []],
   },
+  stops: { latDeltas: deltas, lonDeltas: deltas },
 });
 const realtime = api.decompressRealTimeState({
   vehicles: {
@@ -41,5 +43,8 @@ near(decoded.shapes.route.lats, lats);
 near(decoded.shapes.route.lons, lons);
 near(realtime.vehicles[0].lat, lats);
 near(realtime.vehicles[0].lon, lons);
+near(decoded.shapes.route.stops.lats, [lats[2], lats[1], lats[0], lats[3]]);
+near(decoded.shapes.route.stops.lons, [lons[2], lons[1], lons[0], lons[3]]);
+assert.deepEqual(decoded.shapes.empty.stops, { lats: [], lons: [] });
 assert.deepEqual(decoded.shapes.empty.lats, []);
-console.log("Shape and vehicle delta decoding passed.");
+console.log("Shape, stop, and vehicle delta decoding passed.");

@@ -1,8 +1,9 @@
 import maplibregl from "maplibre-gl";
 import { RouteId, Vehicle, Shape } from "./Data";
 import { getMapDpr } from "./url";
+import { StopRenderer } from "./StopRenderer";
 
-type GL = WebGLRenderingContext | WebGL2RenderingContext;
+type GL = WebGL2RenderingContext;
 
 const VERTEX_SHADER_SOURCE = `
 precision highp float;
@@ -397,6 +398,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
   private program: WebGLProgram | null = null;
   private buffer: WebGLBuffer | null = null;
   private vertexCount = 0;
+  private stopRenderer: StopRenderer | null = null;
 
   private aPos0 = -1;
   private aDistance = -1;
@@ -414,6 +416,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     this.gl = gl;
     this.program = createProgram(gl);
     this.buffer = gl.createBuffer();
+    this.stopRenderer = new StopRenderer(gl);
 
     this.aPos0 = gl.getAttribLocation(this.program, "a_pos0");
     this.aDistance = gl.getAttribLocation(this.program, "a_distance");
@@ -425,6 +428,8 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
   }
 
   onRemove() {
+    this.stopRenderer?.destroy();
+    this.stopRenderer = null;
     if (this.gl) {
       if (this.buffer) {
         this.gl.deleteBuffer(this.buffer);
@@ -452,7 +457,12 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
-  render(gl: GL, _options: maplibregl.CustomRenderMethodInput) {
+  render(
+    context: WebGLRenderingContext | WebGL2RenderingContext,
+    _options: maplibregl.CustomRenderMethodInput,
+  ) {
+    // Vehicle marker rendering also requires WebGL2.
+    const gl = context as GL;
     if (!this.program || !this.buffer || !this.map) {
       return;
     }
@@ -527,6 +537,8 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     gl.disableVertexAttribArray(this.aPos0);
     gl.disableVertexAttribArray(this.aDistance);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    // Keep stops above the route and below highlighted vehicle markers.
+    this.stopRenderer?.render(this.map, this.selectedShape.stops, dpr);
   }
 
   private rebuildBuffer() {

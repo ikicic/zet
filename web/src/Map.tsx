@@ -93,10 +93,26 @@ class HighlightedVehicleCriterion {
 }
 
 async function fetchBigStaticData(key: string) {
-  const url = getHttpUrl(`static/${key}`);
+  const url = getHttpUrl(`static/big/v1/${key}`);
   const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const compressedData: CompressedBigStaticData = await response.json();
   return decompressBigStaticData(compressedData);
+}
+
+async function getSelectedShape(
+  shapeId: string,
+  activeStaticKey: string,
+  cached: LoadedBigStaticData | null,
+): Promise<{ loaded: LoadedBigStaticData; shape: Shape | null }> {
+  const loaded =
+    cached?.key === activeStaticKey
+      ? cached
+      : {
+          key: activeStaticKey,
+          data: await fetchBigStaticData(activeStaticKey),
+        };
+  return { loaded, shape: loaded.data.shapes[shapeId] || null };
 }
 
 async function fetchSmallStaticData(key: string) {
@@ -104,28 +120,6 @@ async function fetchSmallStaticData(key: string) {
   const response = await fetch(url);
   const compressedData: CompressedSmallStaticData = await response.json();
   return decompressSmallStaticData(compressedData);
-}
-
-async function getSelectedShape(
-  selectedShapeId: string | null,
-  loadedBigStaticData: LoadedBigStaticData | null,
-  activeStaticKey: string | null,
-  setLoadedBigStaticData: (data: LoadedBigStaticData) => void,
-): Promise<Shape | null> {
-  if (selectedShapeId == null || activeStaticKey == null) {
-    return null;
-  }
-  let bigStaticData: BigStaticData;
-  if (
-    loadedBigStaticData == null ||
-    loadedBigStaticData.key !== activeStaticKey
-  ) {
-    bigStaticData = await fetchBigStaticData(activeStaticKey);
-    setLoadedBigStaticData({ key: activeStaticKey, data: bigStaticData });
-  } else {
-    bigStaticData = loadedBigStaticData.data;
-  }
-  return bigStaticData.shapes[selectedShapeId] || null;
 }
 
 export function Map() {
@@ -564,15 +558,25 @@ export function Map() {
   }, []);
 
   useEffect(() => {
-    getSelectedShape(
-      selectedShapeId,
-      loadedBigStaticData,
-      activeStaticKey,
-      setLoadedBigStaticData,
-    ).then((shape) => {
-      selectedShapeRef.current = shape;
-      setSelectedShape(shape);
-    });
+    let cancelled = false;
+    selectedShapeRef.current = null;
+    setSelectedShape(null);
+    redraw();
+    if (!selectedShapeId || !activeStaticKey) return;
+
+    getSelectedShape(selectedShapeId, activeStaticKey, loadedBigStaticData)
+      .then(({ loaded, shape }) => {
+        if (cancelled) return;
+        setLoadedBigStaticData(loaded);
+        selectedShapeRef.current = shape;
+        setSelectedShape(shape);
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Could not load route and stops:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedShapeId, activeStaticKey, loadedBigStaticData]);
 
   useEffect(() => {

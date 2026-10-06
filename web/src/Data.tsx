@@ -1,10 +1,16 @@
 export type ShapeId = string;
 export type RouteId = number;
 
+export interface Stops {
+  lats: number[];
+  lons: number[];
+}
+
 export interface Shape {
   id: ShapeId;
   lats: number[];
   lons: number[];
+  stops: Stops;
 }
 
 export interface BigStaticData {
@@ -19,6 +25,7 @@ interface CompressedShapes {
   ids: ShapeId[];
   compressedLats: number[][];
   compressedLons: number[][];
+  stopIndexDeltas: number[][];
 }
 
 interface CompressedRoutes {
@@ -27,6 +34,10 @@ interface CompressedRoutes {
 
 export interface CompressedBigStaticData {
   shapes: CompressedShapes;
+  stops: {
+    latDeltas: number[];
+    lonDeltas: number[];
+  };
 }
 
 export interface CompressedSmallStaticData {
@@ -123,11 +134,22 @@ function decodeDeltas(deltas: number[]): number[] {
 export function decompressBigStaticData(
   data: CompressedBigStaticData,
 ): BigStaticData {
+  const stopLats = STATIC_REFERENCE_SYSTEM.decompress_lats(
+    data.stops.latDeltas,
+  );
+  const stopLons = STATIC_REFERENCE_SYSTEM.decompress_lons(
+    data.stops.lonDeltas,
+  );
   const shapes: { [key: ShapeId]: Shape } = {};
   for (let i = 0, n = data.shapes.ids.length; i < n; ++i) {
     const shapeId = data.shapes.ids[i];
+    const stopIndices = decodeDeltas(data.shapes.stopIndexDeltas[i]);
     shapes[shapeId] = {
       id: shapeId,
+      stops: {
+        lats: stopIndices.map((index) => stopLats[index]),
+        lons: stopIndices.map((index) => stopLons[index]),
+      },
       lats: STATIC_REFERENCE_SYSTEM.decompress_lats(
         data.shapes.compressedLats[i],
       ),
