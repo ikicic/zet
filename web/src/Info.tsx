@@ -24,13 +24,6 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
     <Overlay onClose={onClose}>
       <h3>ZET uživo</h3>
       <p>
-        <i>
-          Napomena: zet.skoljka.org je neslužbena aplikacija, neovisna o ZET-u.
-          Za informacije o voznom redu, molimo kontaktirajte{" "}
-          <a href="https://www.zet.hr/kontakti-276/276">ZET</a>.
-        </i>
-      </p>
-      <p>
         Sadrži informacije tijela javne vlasti u skladu s{" "}
         <ExternalLink href="https://data.gov.hr/otvorena-dozvola">
           Otvorenom dozvolom
@@ -64,6 +57,19 @@ export function InfoOverlay({ onClose }: { onClose: () => void }) {
       </p>
       <hr className="feedback-separator" />
       <FeedbackForm />
+      <p style={{ color: "red" }}>
+        <i>
+          Napomena: zet.skoljka.org je neslužbena aplikacija, neovisna o ZET-u.
+          Za informacije o voznom redu, molimo kontaktirajte{" "}
+          <a
+            href="https://www.zet.hr/kontakti-276/276"
+            style={{ color: "inherit" }}
+          >
+            ZET
+          </a>
+          .
+        </i>
+      </p>
     </Overlay>
   );
 }
