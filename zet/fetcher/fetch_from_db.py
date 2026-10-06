@@ -7,7 +7,9 @@ fetcher does.
 """
 
 import argparse
+from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 import json
 import logging
 import sqlite3
@@ -29,19 +31,20 @@ class CmdlineArgs:
 
 
 def load_snapshots(db_path: str):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    # URI mode=ro also prevents SQLite from creating a mistyped database path.
+    uri = Path(db_path).resolve().as_uri() + '?mode=ro'
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
+        cursor = conn.cursor()
 
-    static_rows = cursor.execute(
-        "SELECT fetched_at, gzipped_data FROM static_snapshots "
-        "WHERE length(gzipped_data) > 0 ORDER BY id"
-    ).fetchall()
+        static_rows = cursor.execute(
+            "SELECT fetched_at, gzipped_data FROM static_snapshots "
+            "WHERE length(gzipped_data) > 0 ORDER BY id"
+        ).fetchall()
 
-    realtime_rows = cursor.execute(
-        "SELECT fetched_at, gzipped_data FROM snapshots "
-        "WHERE length(gzipped_data) > 0 ORDER BY id"
-    ).fetchall()
-    conn.close()
+        realtime_rows = cursor.execute(
+            "SELECT fetched_at, gzipped_data FROM snapshots "
+            "WHERE length(gzipped_data) > 0 ORDER BY id"
+        ).fetchall()
 
     return static_rows, realtime_rows
 
