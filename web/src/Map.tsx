@@ -24,6 +24,11 @@ import {
 import { InfoControl, InfoOverlay } from "./Info";
 import "./Map.css";
 import { MapUnavailable } from "./MapUnavailable";
+import {
+  diagnoseMapFailure,
+  MAP_CONTEXT_ATTRIBUTES,
+  MapFailure,
+} from "./GraphicsDiagnostics";
 import { VehicleLayer } from "./VehicleLayer";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
@@ -127,7 +132,7 @@ export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const mapLoadedRef = useRef<boolean>(false);
-  const [mapUnavailable, setMapUnavailable] = useState(false);
+  const [mapFailure, setMapFailure] = useState<MapFailure | null>(null);
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [showFilter, setShowFilter] = useState<boolean>(false);
 
@@ -321,7 +326,10 @@ export function Map() {
       map = new maplibregl.Map({
         container: mapContainer.current,
         style: "/style.json",
-        canvasContextAttributes: { contextType: "webgl2" },
+        canvasContextAttributes: {
+          ...MAP_CONTEXT_ATTRIBUTES,
+          contextType: "webgl2",
+        },
         center: center,
         zoom: 12,
         minZoom: 9,
@@ -337,12 +345,17 @@ export function Map() {
       });
     } catch (error) {
       console.error("Map initialization failed", error);
+      const failure = diagnoseMapFailure(
+        error,
+        [mapContainer.current.clientWidth, mapContainer.current.clientHeight],
+        maplibregl.getVersion(),
+      );
       mapContainer.current.replaceChildren();
-      setMapUnavailable(true);
+      setMapFailure(failure);
       return;
     }
     mapRef.current = map;
-    setMapUnavailable(false);
+    setMapFailure(null);
     if (STRESS_MODE) {
       const animationStart = performance.now();
       const animateMap = (now: number) => {
@@ -476,91 +489,114 @@ export function Map() {
 
     // Initialize trajectory source and layer
     map.on("load", () => {
-      if (!map) {
+      if (isUnmounted) {
         return;
       }
-      if (PERFORMANCE_MODE) {
-        updateMapCanvasDpr();
-      }
+      try {
+        if (PERFORMANCE_MODE) {
+          updateMapCanvasDpr();
+        }
 
-      const emptyGeoJSON: maplibregl.GeoJSONSourceSpecification = {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: [],
-        },
-      };
+        const emptyGeoJSON: maplibregl.GeoJSONSourceSpecification = {
+          type: "geojson",
+          data: {
+            type: "FeatureCollection",
+            features: [],
+          },
+        };
 
-      // Create an empty icon for collision detection.
-      const SIZE = 13 * window.devicePixelRatio;
-      const canvas = document.createElement("canvas");
-      canvas.width = SIZE;
-      canvas.height = SIZE;
-      const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "red";
-      ctx.fillRect(0, 0, SIZE, SIZE);
-      map.addImage("ghost-marker", ctx.getImageData(0, 0, SIZE, SIZE));
+        // Create an empty icon for collision detection.
+        const SIZE = 13 * window.devicePixelRatio;
+        const canvas = document.createElement("canvas");
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+        const ctx = canvas.getContext("2d")!;
+        ctx.fillStyle = "red";
+        ctx.fillRect(0, 0, SIZE, SIZE);
+        map.addImage("ghost-marker", ctx.getImageData(0, 0, SIZE, SIZE));
 
-      // Add a ghost layer, containing one symbol for each vehicle, such that
-      // maplibre hides area names benith vehicles. This way we declutter the
-      // map a bit.
-      map.addSource("collision-proxy", emptyGeoJSON);
-      map.addLayer({
-        id: "collision-proxy",
-        type: "symbol",
-        source: "collision-proxy",
-        layout: {
-          "icon-image": "ghost-marker",
-          "icon-size": 1,
-          // "Show" all vehicles even if they overlap, to hopefully speed up
-          // the collision step.
-          "icon-allow-overlap": true,
-          "icon-ignore-placement": false, // Hide map labels benith this layer.
-        },
-        paint: {
-          "icon-opacity": 0, // Do not render, just use for collision detection.
-        },
-      });
+        // Add a ghost layer, containing one symbol for each vehicle, such that
+        // maplibre hides area names benith vehicles. This way we declutter the
+        // map a bit.
+        map.addSource("collision-proxy", emptyGeoJSON);
+        map.addLayer({
+          id: "collision-proxy",
+          type: "symbol",
+          source: "collision-proxy",
+          layout: {
+            "icon-image": "ghost-marker",
+            "icon-size": 1,
+            // "Show" all vehicles even if they overlap, to hopefully speed up
+            // the collision step.
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": false, // Hide map labels benith this layer.
+          },
+          paint: {
+            "icon-opacity": 0, // Do not render, just use for collision detection.
+          },
+        });
 
-      const vehicleLayer = new VehicleLayer(map, {
-        onVehicleClick: (vehicle) => {
-          setSelectedShapeId(vehicle.shapeId);
-          highlightedVehicleCriterion.current.setSelectedRouteId(
-            vehicle.routeId,
+        const vehicleLayer = new VehicleLayer(map, {
+          onVehicleClick: (vehicle) => {
+            setSelectedShapeId(vehicle.shapeId);
+            highlightedVehicleCriterion.current.setSelectedRouteId(
+              vehicle.routeId,
+            );
+            // Highlight immediately; the selected shape is fetched separately.
+            redraw();
+          },
+          onNothingClick: () => {
+            setSelectedShapeId(null);
+            highlightedVehicleCriterion.current.setSelectedRouteId(null);
+            selectedShapeRef.current = null;
+            setSelectedShape(null);
+            redraw();
+          },
+          measureInitialAtlasBuild: PERFORMANCE_MODE,
+        });
+        vehicleLayerRef.current = vehicleLayer;
+        if (PERFORMANCE_MODE) {
+          setInitialAtlasBuildMs(vehicleLayer.initialAtlasBuildMs);
+        }
+
+        mapLoadedRef.current = true;
+
+        // If we already have vehicle data from WebSocket, display it now
+        if (realTimeData.current) {
+          redraw();
+        }
+      } catch (error) {
+        console.error("Map layer initialization failed", error);
+        const size = [
+          map.getContainer().clientWidth,
+          map.getContainer().clientHeight,
+        ];
+        // MapLibre may still be dispatching its load event. Tear down afterward.
+        queueMicrotask(() => {
+          if (isUnmounted) return;
+          cleanup();
+          setMapFailure(
+            diagnoseMapFailure(
+              error,
+              size,
+              maplibregl.getVersion(),
+              "map-layers",
+            ),
           );
-          // Highlight immediately; the selected shape is fetched separately.
-          redraw();
-        },
-        onNothingClick: () => {
-          setSelectedShapeId(null);
-          highlightedVehicleCriterion.current.setSelectedRouteId(null);
-          selectedShapeRef.current = null;
-          setSelectedShape(null);
-          redraw();
-        },
-        measureInitialAtlasBuild: PERFORMANCE_MODE,
-      });
-      vehicleLayerRef.current = vehicleLayer;
-      if (PERFORMANCE_MODE) {
-        setInitialAtlasBuildMs(vehicleLayer.initialAtlasBuildMs);
-      }
-
-      mapLoadedRef.current = true;
-
-      // If we already have vehicle data from WebSocket, display it now
-      if (realTimeData.current) {
-        redraw();
+        });
       }
     });
 
     // Cleanup
-    return () => {
+    const cleanup = () => {
+      if (isUnmounted) return;
       isUnmounted = true;
       if (stressAnimationFrame !== null) {
         cancelAnimationFrame(stressAnimationFrame);
       }
       if (vehicleLayerRef.current) {
         vehicleLayerRef.current.destroy();
+        vehicleLayerRef.current = null;
       }
       if (PERFORMANCE_MODE) {
         map.off("resize", updateMapCanvasDpr);
@@ -570,6 +606,7 @@ export function Map() {
       mapLoadedRef.current = false;
       newsControlRef.current = null;
     };
+    return cleanup;
   }, []);
 
   useEffect(() => {
@@ -722,8 +759,8 @@ export function Map() {
     }
   }, [filterState]);
 
-  if (mapUnavailable) {
-    return <MapUnavailable />;
+  if (mapFailure) {
+    return <MapUnavailable failure={mapFailure} />;
   }
 
   return (

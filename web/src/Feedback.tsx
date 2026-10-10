@@ -2,14 +2,19 @@ import { useState } from "react";
 import { getHttpUrl } from "./url";
 import "./Feedback.css";
 
+type FeedbackKind = "feedback" | "map-error";
+
 export function FeedbackForm({
   initialMessage = "",
   title = "Povratna informacija",
+  kind = "feedback",
 }: {
   initialMessage?: string;
   title?: string;
+  kind?: FeedbackKind;
 }) {
-  const [message, setMessage] = useState(() => initialMessage.slice(0, 1000));
+  const maxMessageLength = kind === "map-error" ? 20_000 : 1000;
+  const [message, setMessage] = useState(initialMessage);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<{
@@ -18,13 +23,15 @@ export function FeedbackForm({
   } | null>(null);
 
   const handleSubmit = async () => {
-    if (!message.trim() || submitting) return;
+    if (!message.trim() || message.length > maxMessageLength || submitting)
+      return;
 
     setSubmitting(true);
     setStatus(null);
 
-    const body: { message: string; email?: string } = {
+    const body: { message: string; email?: string; kind: FeedbackKind } = {
       message: message.trim(),
+      kind,
     };
     if (email.trim()) {
       body.email = email.trim();
@@ -72,7 +79,7 @@ export function FeedbackForm({
         placeholder="Vaša poruka..."
         value={message}
         onChange={(e) => setMessage(e.target.value)}
-        maxLength={1000}
+        maxLength={maxMessageLength}
         disabled={submitting}
       />
       <input
@@ -86,11 +93,15 @@ export function FeedbackForm({
         disabled={submitting}
       />
       <div className="feedback-footer">
-        <span className="feedback-char-count">{message.length}/1000</span>
+        <span className="feedback-char-count">
+          {message.length}/{maxMessageLength}
+        </span>
         <button
           className="feedback-submit"
           onClick={handleSubmit}
-          disabled={!message.trim() || submitting}
+          disabled={
+            !message.trim() || message.length > maxMessageLength || submitting
+          }
         >
           {submitting ? "Slanje..." : "Pošalji"}
         </button>

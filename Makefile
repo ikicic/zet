@@ -16,7 +16,8 @@ clean:
 	rm -rf $(VENV_DIR)
 	rm -rf web/node_modules
 
-test: $(VENV_DIR)/bin/activate
+test: $(VENV_DIR)/bin/activate web/node_modules
 	$(VENV_DIR)/bin/python -m unittest discover -s tests -p 'test_*.py'
+	npm --prefix web run test:graphics
 
 .PHONY: all clean test

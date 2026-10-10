@@ -1,28 +1,42 @@
 import { FeedbackForm } from "./Feedback";
+import type { MapFailure } from "./GraphicsDiagnostics";
+import { formatMapFailureMessage } from "./MapFailureMessage";
 
-export function MapUnavailable() {
-  const message = `Pozdrav,
+export function MapUnavailable({ failure }: { failure: MapFailure }) {
+  const message = formatMapFailureMessage(failure);
 
-karta se ne može prikazati na mojem uređaju. Molim vas za podršku za moj uređaj i preglednik.
-
-Automatski podaci preglednika i operacijskog sustava:
-${navigator.userAgent}`;
+  const webgl2 = failure.diagnostics?.webgl2;
+  const webgl2Unavailable =
+    webgl2?.map.contextCreated === false &&
+    webgl2.relaxed?.contextCreated === false;
 
   return (
     <main className="map-unavailable">
       <div>
-        <p>Ova stranica prikazuje položaje ZET-ovih tramvaja i autobusa uživo.</p>
-        <h1>Kartu nije moguće prikazati</h1>
+        <h1>zet.skoljka.org - položaji ZET tramvaja i autobusa uživo</h1>
         <p>
-          Za prikaz karte potreban je WebGL2, koji možda nije dostupan na vašem
-          uređaju ili u vašem pregledniku.
+          Dobrodošli na zet.skoljka.org!
         </p>
         <p>
-          Želite li podršku za svoj uređaj? Kliknite „Pošalji” kako biste nam
-          poslali pripremljenu poruku s podacima Vašeg preglednika. Poruku možete
-          izmijeniti, a e-mail navesti ako želite odgovor.
+          {webgl2Unavailable
+            ? "Ova aplikacija trenutačno zahtijeva WebGL2, koji nije dostupan na Vašem uređaju ili u Vašem pregledniku."
+            : "Došlo je do greške pri prikazu karte."}
         </p>
-        <FeedbackForm initialMessage={message} title="Zahtjev za podršku" />
+        <p>
+          Pokušajte ponovno učitati stranicu ili je otvoriti u drugom pregledniku.
+        </p>
+        <p>
+          Problem možete prijaviti putem obrasca ispod. Poruka uključuje
+          tehničke podatke o Vašem uređaju koji nam pomažu pronaći uzrok i
+          poboljšati aplikaciju. Po potrebi, poruku možete izmijeniti prije
+          slanja. E-mail navedite ako želite da Vas kontaktiramo, npr. ako
+          dodamo podršku za Vaš uređaj.
+        </p>
+        <FeedbackForm
+          initialMessage={message}
+          title="Zahtjev za podršku"
+          kind="map-error"
+        />
       </div>
     </main>
   );

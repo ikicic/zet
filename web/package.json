@@ -7,6 +7,7 @@
     "start": "webpack serve",
     "build": "webpack --mode production",
     "test:data": "node scripts/test-data.cjs",
+    "test:graphics": "node scripts/test-graphics.cjs",
     "stress-server": "node scripts/stress-server.js"
   },
   "repository": {

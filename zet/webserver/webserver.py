@@ -868,6 +868,8 @@ def static_data_small(key: str):
 
 FEEDBACK_RATE_LIMIT = 100  # max submissions per hour
 FEEDBACK_RATE_WINDOW = 3600  # seconds
+FEEDBACK_MESSAGE_MAX_LENGTH = 1000
+MAP_ERROR_MESSAGE_MAX_LENGTH = 20_000
 
 
 @app.route('/api/feedback', methods=['POST'])
@@ -881,10 +883,16 @@ def feedback():
             or not isinstance(data.get('message'), str)):
         return jsonify({"error": "Neispravan zahtjev."}), 400
 
+    kind = data.get('kind', 'feedback')
+    if kind not in ('feedback', 'map-error'):
+        return jsonify({"error": "Neispravan zahtjev."}), 400
+    max_length = (MAP_ERROR_MESSAGE_MAX_LENGTH if kind == 'map-error'
+                  else FEEDBACK_MESSAGE_MAX_LENGTH)
+
     message = data['message'].strip()
     if not message:
         return jsonify({"error": "Poruka ne smije biti prazna."}), 400
-    if len(message) > 1000:
+    if len(message) > max_length:
         return jsonify({"error": "Poruka je predugačka."}), 400
 
     now = time.time()
