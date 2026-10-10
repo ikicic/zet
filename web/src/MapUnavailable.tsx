@@ -6,9 +6,12 @@ export function MapUnavailable({ failure }: { failure: MapFailure }) {
   const message = formatMapFailureMessage(failure);
 
   const webgl2 = failure.diagnostics?.webgl2;
-  const webgl2Unavailable =
+  const webgl1 = failure.diagnostics?.webgl1;
+  const webglUnavailable =
     webgl2?.map.contextCreated === false &&
-    webgl2.relaxed?.contextCreated === false;
+    webgl2.relaxed?.contextCreated === false &&
+    webgl1?.map.contextCreated === false &&
+    webgl1.relaxed?.contextCreated === false;
 
   return (
     <main className="map-unavailable">
@@ -18,8 +21,8 @@ export function MapUnavailable({ failure }: { failure: MapFailure }) {
           Dobrodošli na zet.skoljka.org!
         </p>
         <p>
-          {webgl2Unavailable
-            ? "Ova aplikacija trenutačno zahtijeva WebGL2, koji nije dostupan na Vašem uređaju ili u Vašem pregledniku."
+          {webglUnavailable
+            ? "Ova aplikacija zahtijeva WebGL, koji nije dostupan na Vašem uređaju ili u Vašem pregledniku."
             : "Došlo je do greške pri prikazu karte."}
         </p>
         <p>

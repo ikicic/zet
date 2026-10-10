@@ -461,7 +461,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     context: WebGLRenderingContext | WebGL2RenderingContext,
     _options: maplibregl.CustomRenderMethodInput,
   ) {
-    // Vehicle marker rendering also requires WebGL2.
+    // VehicleLayer only installs trajectories on WebGL2 contexts.
     const gl = context as GL;
     if (!this.program || !this.buffer || !this.map) {
       return;

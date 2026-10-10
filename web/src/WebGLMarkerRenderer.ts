@@ -1,10 +1,10 @@
 // Instanced vehicle marker renderer as a MapLibre custom layer.
 // Draws sprites from a MarkerAtlas texture on the map's WebGL canvas.
 
-import maplibregl from "maplibre-gl";
+import type maplibregl from "maplibre-gl";
 import { MarkerAtlas, AtlasEntry } from "./MarkerAtlas";
 
-type GL = WebGL2RenderingContext;
+type GL = WebGLRenderingContext | WebGL2RenderingContext;
 
 /**
  * Canvas uploads can be premultiplied by WebGL, but typed-array uploads
@@ -71,6 +71,36 @@ void main() {
 }
 `;
 
+// The WebGL1 fallback receives ordinary, CPU-expanded triangles. The WebGL2
+// shaders and instance buffers above remain unchanged.
+const FALLBACK_VERTEX_SHADER = `
+attribute vec2 a_position;
+attribute vec2 a_texCoord;
+attribute vec4 a_color;
+uniform vec2 u_canvasSize;
+varying TEX_PRECISION vec2 v_texCoord;
+varying mediump vec4 v_color;
+void main() {
+  vec2 clip = a_position / u_canvasSize * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  v_texCoord = a_texCoord;
+  v_color = a_color;
+}
+`;
+
+const FALLBACK_FRAGMENT_SHADER = `
+precision mediump float;
+varying TEX_PRECISION vec2 v_texCoord;
+varying mediump vec4 v_color;
+uniform sampler2D u_atlas;
+void main() {
+  gl_FragColor = texture2D(u_atlas, v_texCoord) * v_color;
+}
+`;
+
+const FLOATS_PER_FALLBACK_VERTEX = 8; // screen position, UV, colour
+const FALLBACK_CORNERS = [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1];
+
 // Per instance: screenX, screenY, atlasX, atlasY, atlasW, atlasH, cx, cy,
 //               flipX, flipY, r, g, b, a = 14 floats.
 const FLOATS_PER_INSTANCE = 14;
@@ -91,12 +121,26 @@ function compileShader(gl: GL, type: number, source: string): WebGLShader {
   return shader;
 }
 
-function createProgram(gl: GL): WebGLProgram {
-  const vs = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+function createProgram(
+  gl: GL,
+  fallbackPrecision: "highp" | "mediump" | null,
+): WebGLProgram {
+  const vertexSource = fallbackPrecision
+    ? FALLBACK_VERTEX_SHADER.replace(/TEX_PRECISION/g, fallbackPrecision)
+    : VERTEX_SHADER;
+  const fragmentSource = fallbackPrecision
+    ? FALLBACK_FRAGMENT_SHADER.replace(/TEX_PRECISION/g, fallbackPrecision)
+    : FRAGMENT_SHADER;
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
   const program = gl.createProgram()!;
   gl.attachShader(program, vs);
   gl.attachShader(program, fs);
+  if (fallbackPrecision) {
+    gl.bindAttribLocation(program, 0, "a_position");
+    gl.bindAttribLocation(program, 1, "a_texCoord");
+    gl.bindAttribLocation(program, 2, "a_color");
+  }
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(program);
@@ -112,12 +156,25 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   type = "custom" as const;
   renderingMode = "2d" as const;
 
-  private gl: WebGL2RenderingContext | null = null;
+  private gl: GL | null = null;
+  private gl2: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private quadBuffer: WebGLBuffer | null = null;
   private instanceBuffer: WebGLBuffer | null = null;
   private atlasTexture: WebGLTexture | null = null;
+  private fallbackVertices = new Float32Array(0);
+  private fallbackAtlasCanvas: HTMLCanvasElement | null = null;
+  private maxAtlasSize = Infinity;
+  private spriteScale = 1;
+
+  get supportsWebGL2() {
+    return this.gl2 !== null;
+  }
+
+  get maximumAtlasSize() {
+    return this.maxAtlasSize;
+  }
 
   private uCanvasSize: WebGLUniformLocation | null = null;
   private uAtlasSize: WebGLUniformLocation | null = null;
@@ -145,8 +202,9 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   }
 
   /** Atlas reference used for texture uploads during render. */
-  setAtlas(atlas: MarkerAtlas) {
+  setAtlas(atlas: MarkerAtlas, spriteScale = 1) {
     this.atlas = atlas;
+    this.spriteScale = spriteScale;
     this.uploadedW = 0;
     this.uploadedH = 0;
   }
@@ -195,17 +253,40 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
 
   onAdd(_map: maplibregl.Map, gl: GL) {
     this.gl = gl;
+    this.gl2 =
+      typeof WebGL2RenderingContext !== "undefined" &&
+      gl instanceof WebGL2RenderingContext
+        ? gl
+        : null;
+    const fallbackPrecision = this.gl2
+      ? null
+      : (gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)
+            ?.precision ?? 0) > 0
+        ? "highp"
+        : "mediump";
+    // Small textures also limit UV rounding on fragment processors without highp.
+    this.maxAtlasSize = this.gl2
+      ? Infinity
+      : Math.min(
+          gl.getParameter(gl.MAX_TEXTURE_SIZE),
+          fallbackPrecision === "mediump" ? 1024 : Infinity,
+        );
 
     if (__DEV__) {
       console.log("WebGLMarkerRenderer: custom layer on MapLibre canvas");
     }
 
-    const program = createProgram(gl);
+    const program = createProgram(gl, fallbackPrecision);
     this.program = program;
 
     this.uCanvasSize = gl.getUniformLocation(program, "u_canvasSize");
     this.uAtlasSize = gl.getUniformLocation(program, "u_atlasSize");
     this.uAtlas = gl.getUniformLocation(program, "u_atlas");
+
+    this.instanceBuffer = gl.createBuffer();
+    this.atlasTexture = gl.createTexture();
+    if (!this.gl2) return;
+    const gl2 = this.gl2;
 
     this.quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
@@ -215,16 +296,13 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
       gl.STATIC_DRAW,
     );
 
-    this.instanceBuffer = gl.createBuffer();
-    this.atlasTexture = gl.createTexture();
-
-    this.vao = gl.createVertexArray();
-    gl.bindVertexArray(this.vao);
+    this.vao = gl2.createVertexArray();
+    gl2.bindVertexArray(this.vao);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.vertexAttribDivisor(0, 0);
+    gl2.vertexAttribDivisor(0, 0);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.enableVertexAttribArray(1);
@@ -238,39 +316,41 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.enableVertexAttribArray(5);
     gl.vertexAttribPointer(5, 4, gl.FLOAT, false, BYTES_PER_INSTANCE, 40);
 
-    gl.vertexAttribDivisor(1, 1);
-    gl.vertexAttribDivisor(2, 1);
-    gl.vertexAttribDivisor(3, 1);
-    gl.vertexAttribDivisor(4, 1);
-    gl.vertexAttribDivisor(5, 1);
+    gl2.vertexAttribDivisor(1, 1);
+    gl2.vertexAttribDivisor(2, 1);
+    gl2.vertexAttribDivisor(3, 1);
+    gl2.vertexAttribDivisor(4, 1);
+    gl2.vertexAttribDivisor(5, 1);
 
-    gl.bindVertexArray(null);
+    gl2.bindVertexArray(null);
   }
 
   onRemove() {
     const gl = this.gl;
     if (gl) {
-      if (this.vao) gl.deleteVertexArray(this.vao);
+      if (this.vao) this.gl2?.deleteVertexArray(this.vao);
       if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer);
       if (this.instanceBuffer) gl.deleteBuffer(this.instanceBuffer);
       if (this.atlasTexture) gl.deleteTexture(this.atlasTexture);
       if (this.program) gl.deleteProgram(this.program);
     }
     this.gl = null;
+    this.gl2 = null;
     this.program = null;
     this.vao = null;
     this.quadBuffer = null;
     this.instanceBuffer = null;
     this.atlasTexture = null;
+    this.fallbackAtlasCanvas = null;
+    this.fallbackVertices = new Float32Array(0);
   }
 
   render(
     context: WebGLRenderingContext | WebGL2RenderingContext,
     _options: maplibregl.CustomRenderMethodInput,
   ) {
-    // Map initialization requires WebGL2.
-    const gl = context as GL;
-    if (!this.program || !this.vao || !this.instanceBuffer || !this.atlas) {
+    const gl = context;
+    if (!this.program || !this.instanceBuffer || !this.atlas) {
       return;
     }
 
@@ -281,18 +361,22 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
 
     const count = this.instanceCount;
     if (count === 0) {
-      this.betweenMarkerGroups?.(gl);
+      if (this.gl2) this.betweenMarkerGroups?.(this.gl2);
       return;
     }
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-    const usedFloats = count * FLOATS_PER_INSTANCE;
-    this.instanceData.fill(0, usedFloats, usedFloats + BUFFER_PADDING_FLOATS);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      this.instanceData.subarray(0, usedFloats + BUFFER_PADDING_FLOATS),
-      gl.DYNAMIC_DRAW,
-    );
+    if (this.gl2) {
+      const usedFloats = count * FLOATS_PER_INSTANCE;
+      this.instanceData.fill(0, usedFloats, usedFloats + BUFFER_PADDING_FLOATS);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        this.instanceData.subarray(0, usedFloats + BUFFER_PADDING_FLOATS),
+        gl.DYNAMIC_DRAW,
+      );
+    } else {
+      this.uploadFallbackVertices(gl);
+    }
 
     const canvas = gl.canvas as HTMLCanvasElement;
     gl.useProgram(this.program);
@@ -312,7 +396,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.disable(gl.DEPTH_TEST);
 
     this.drawInstances(gl, 0, this.unselectedInstanceCount);
-    this.betweenMarkerGroups?.(gl);
+    if (this.gl2) this.betweenMarkerGroups?.(this.gl2);
 
     // The trajectory renderer changes the current program and buffer state.
     gl.useProgram(this.program);
@@ -333,12 +417,22 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
-  private drawInstances(
-    gl: WebGL2RenderingContext,
-    start: number,
-    count: number,
-  ) {
-    if (count === 0 || !this.vao || !this.instanceBuffer) return;
+  private drawInstances(context: GL, start: number, count: number) {
+    if (count === 0 || !this.instanceBuffer) return;
+    if (!this.gl2) {
+      const stride = FLOATS_PER_FALLBACK_VERTEX * 4;
+      context.bindBuffer(context.ARRAY_BUFFER, this.instanceBuffer);
+      context.enableVertexAttribArray(0);
+      context.enableVertexAttribArray(1);
+      context.enableVertexAttribArray(2);
+      context.vertexAttribPointer(0, 2, context.FLOAT, false, stride, 0);
+      context.vertexAttribPointer(1, 2, context.FLOAT, false, stride, 8);
+      context.vertexAttribPointer(2, 4, context.FLOAT, false, stride, 16);
+      context.drawArrays(context.TRIANGLES, start * 6, count * 6);
+      return;
+    }
+    const gl = this.gl2;
+    if (!this.vao) return;
 
     const instanceOffset = start * BYTES_PER_INSTANCE;
     gl.bindVertexArray(this.vao);
@@ -387,7 +481,48 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.bindVertexArray(null);
   }
 
-  private uploadAtlas(gl: WebGL2RenderingContext, atlas: MarkerAtlas) {
+  private uploadFallbackVertices(gl: GL) {
+    const needed = this.instanceCount * 6 * FLOATS_PER_FALLBACK_VERTEX;
+    if (this.fallbackVertices.length < needed) {
+      this.fallbackVertices = new Float32Array(
+        Math.max(needed, this.fallbackVertices.length * 2),
+      );
+    }
+    const data = this.instanceData;
+    const vertices = this.fallbackVertices;
+    const atlasWidth = this.atlas!.canvas.width;
+    const atlasHeight = this.atlas!.canvas.height;
+    let out = 0;
+    for (let i = 0; i < this.instanceCount; ++i) {
+      const base = i * FLOATS_PER_INSTANCE;
+      const left = data[base] - data[base + 6] * this.spriteScale;
+      const top = data[base + 1] - data[base + 7] * this.spriteScale;
+      const width = data[base + 4];
+      const height = data[base + 5];
+      for (let corner = 0; corner < FALLBACK_CORNERS.length; corner += 2) {
+        const x = FALLBACK_CORNERS[corner];
+        const y = FALLBACK_CORNERS[corner + 1];
+        const u = data[base + 8] ? 1 - x : x;
+        const v = data[base + 9] ? 1 - y : y;
+        vertices[out++] = left + x * width * this.spriteScale;
+        vertices[out++] = top + y * height * this.spriteScale;
+        vertices[out++] = (data[base + 2] + 0.5 + u * (width - 1)) / atlasWidth;
+        vertices[out++] =
+          (data[base + 3] + 0.5 + v * (height - 1)) / atlasHeight;
+        vertices[out++] = data[base + 10];
+        vertices[out++] = data[base + 11];
+        vertices[out++] = data[base + 12];
+        vertices[out++] = data[base + 13];
+      }
+    }
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      vertices.subarray(0, needed),
+      gl.DYNAMIC_DRAW,
+    );
+  }
+
+  private uploadAtlas(gl: GL, atlas: MarkerAtlas) {
     if (!this.atlasTexture) return;
 
     const dirty = atlas.consumeDirtyRect();
@@ -396,9 +531,44 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
-    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
-    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+    if (this.gl2) {
+      gl.pixelStorei(this.gl2.UNPACK_ROW_LENGTH, 0);
+      gl.pixelStorei(this.gl2.UNPACK_SKIP_PIXELS, 0);
+      gl.pixelStorei(this.gl2.UNPACK_SKIP_ROWS, 0);
+    }
+
+    // Dynamic labels can grow an atlas past the old GPU's texture/precision
+    // limit. Downsample uploads on that fallback only, preserving logical UVs.
+    if (
+      !this.gl2 &&
+      (atlas.canvas.width > this.maxAtlasSize ||
+        atlas.canvas.height > this.maxAtlasSize)
+    ) {
+      const canvas = (this.fallbackAtlasCanvas ??=
+        document.createElement("canvas"));
+      const scale =
+        this.maxAtlasSize / Math.max(atlas.canvas.width, atlas.canvas.height);
+      canvas.width = Math.max(1, Math.floor(atlas.canvas.width * scale));
+      canvas.height = Math.max(1, Math.floor(atlas.canvas.height * scale));
+      canvas
+        .getContext("2d")!
+        .drawImage(atlas.canvas, 0, 0, canvas.width, canvas.height);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        canvas,
+      );
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.uploadedW = canvas.width;
+      this.uploadedH = canvas.height;
+      return;
+    }
 
     const dimsChanged =
       this.uploadedW !== atlas.canvas.width ||

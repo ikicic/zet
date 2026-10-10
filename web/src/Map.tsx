@@ -328,7 +328,9 @@ export function Map() {
         style: "/style.json",
         canvasContextAttributes: {
           ...MAP_CONTEXT_ATTRIBUTES,
-          contextType: "webgl2",
+          // Prefer WebGL2; MapLibre falls back to WebGL1 when it is unavailable.
+          contextType:
+            __DEV__ && URL_PARAMS.get("webgl") === "1" ? "webgl" : undefined,
         },
         center: center,
         zoom: 12,

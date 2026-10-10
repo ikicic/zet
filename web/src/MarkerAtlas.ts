@@ -160,7 +160,12 @@ function computeLabelSlotSize(dpr: number): LabelSlotSize {
 
   const textWidth = metrics.width;
   const textHeight =
-    metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+    (metrics.fontBoundingBoxAscent ??
+      metrics.actualBoundingBoxAscent ??
+      fontSize) +
+    (metrics.fontBoundingBoxDescent ??
+      metrics.actualBoundingBoxDescent ??
+      fontSize * 0.25);
 
   const fullW = Math.ceil(textWidth + 2 * shadowBlur + 4 + 2);
   const fullH = Math.ceil(textHeight + 2 * shadowBlur + 4);
@@ -171,21 +176,37 @@ function computeLabelSlotSize(dpr: number): LabelSlotSize {
 
   const left = Math.max(
     0,
-    Math.floor(cxCenter - metrics.actualBoundingBoxLeft - labelShadowPad),
+    Math.floor(
+      cxCenter -
+        (metrics.actualBoundingBoxLeft ?? textWidth / 2) -
+        labelShadowPad,
+    ),
   );
   const right = Math.max(
     0,
     fullW -
-      Math.ceil(cxCenter + metrics.actualBoundingBoxRight + labelShadowPad),
+      Math.ceil(
+        cxCenter +
+          (metrics.actualBoundingBoxRight ?? textWidth / 2) +
+          labelShadowPad,
+      ),
   );
   const top = Math.max(
     0,
-    Math.floor(cyCenter - metrics.actualBoundingBoxAscent - labelShadowPad),
+    Math.floor(
+      cyCenter -
+        (metrics.actualBoundingBoxAscent ?? textHeight / 2) -
+        labelShadowPad,
+    ),
   );
   const bottom = Math.max(
     0,
     fullH -
-      Math.ceil(cyCenter + metrics.actualBoundingBoxDescent + labelShadowPad),
+      Math.ceil(
+        cyCenter +
+          (metrics.actualBoundingBoxDescent ?? textHeight / 2) +
+          labelShadowPad,
+      ),
   );
 
   return {

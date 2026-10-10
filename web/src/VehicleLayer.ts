@@ -70,7 +70,7 @@ export class VehicleLayer {
   private _atlas: MarkerAtlas | null = null;
   private atlasDpr = 0;
   private markerLayer: WebGLMarkerRenderer;
-  private trajectoryLayer: TrajectoryLayer;
+  private trajectoryLayer: TrajectoryLayer | null = null;
   private map: maplibregl.Map;
   private options: VehicleLayerOptions;
   private measureInitialAtlasBuild: boolean;
@@ -102,15 +102,19 @@ export class VehicleLayer {
     this.options = options;
     this.measureInitialAtlasBuild = options.measureInitialAtlasBuild === true;
 
-    this.trajectoryLayer = new TrajectoryLayer();
     this.markerLayer = new WebGLMarkerRenderer();
     this.markerLayer.setFrameBuilder(() => this.buildMarkers());
-    this.markerLayer.setBetweenMarkerGroups((gl) =>
-      this.trajectoryLayer.renderSelectedShape(gl),
-    );
-
-    map.addLayer(this.trajectoryLayer);
     map.addLayer(this.markerLayer);
+    // Routes and stops still use WebGL2. Their absence must not stop vehicle
+    // rendering, filtering or selection on the WebGL1 fallback.
+    if (this.markerLayer.supportsWebGL2) {
+      const trajectoryLayer = new TrajectoryLayer();
+      this.trajectoryLayer = trajectoryLayer;
+      this.markerLayer.setBetweenMarkerGroups((gl) =>
+        trajectoryLayer.renderSelectedShape(gl),
+      );
+      map.addLayer(trajectoryLayer, this.markerLayer.id);
+    }
 
     this.ensureAtlas();
     map.on("resize", this.onResize);
@@ -129,7 +133,7 @@ export class VehicleLayer {
     if (this.map.getLayer(this.markerLayer.id)) {
       this.map.removeLayer(this.markerLayer.id);
     }
-    if (this.map.getLayer(this.trajectoryLayer.id)) {
+    if (this.trajectoryLayer && this.map.getLayer(this.trajectoryLayer.id)) {
       this.map.removeLayer(this.trajectoryLayer.id);
     }
   }
@@ -145,7 +149,7 @@ export class VehicleLayer {
     this.highlightedRouteId = highlightedRouteId;
     this.selectedShape = selectedShape;
 
-    this.trajectoryLayer.setData(
+    this.trajectoryLayer?.setData(
       vehicles,
       filterSelection,
       highlightedRouteId,
@@ -176,9 +180,20 @@ export class VehicleLayer {
 
   /** (Re)build the atlas when the map's pixel ratio is known or changes. */
   private ensureAtlas() {
-    const dpr = getMapDpr();
-    if (this._atlas && this.atlasDpr === dpr) {
+    const displayDpr = getMapDpr();
+    if (this._atlas && this.atlasDpr === displayDpr) {
       return;
+    }
+
+    let dpr = displayDpr;
+    if (!this.markerLayer.supportsWebGL2) {
+      // Preserve full display resolution unless texture size or shader precision
+      // requires a smaller atlas. Sprite scaling preserves on-screen size.
+      while (dpr > 0.25) {
+        const { width, height } = computeAtlasDimensions(dpr);
+        if (Math.max(width, height) <= this.markerLayer.maximumAtlasSize) break;
+        dpr /= 2;
+      }
     }
 
     const { width: atlasWidth, height: atlasHeight } =
@@ -188,8 +203,8 @@ export class VehicleLayer {
     if (this.measureInitialAtlasBuild && this._initialAtlasBuildMs === null) {
       this._initialAtlasBuildMs = performance.now() - atlasStart;
     }
-    this.atlasDpr = dpr;
-    this.markerLayer.setAtlas(this._atlas);
+    this.atlasDpr = displayDpr;
+    this.markerLayer.setAtlas(this._atlas, displayDpr / dpr);
     this.lastState = null;
   }
 

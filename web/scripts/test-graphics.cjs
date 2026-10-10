@@ -7,6 +7,7 @@ const path = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const ts = require("typescript");
+const markerTests = require("./test-markers.cjs");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../src/GraphicsDiagnostics.ts"),
@@ -19,7 +20,7 @@ const { outputText } = ts.transpileModule(source, {
   },
 });
 
-function browserTests() {
+async function browserTests() {
   const check = (condition, message) => {
     if (!condition) throw new Error(message);
   };
@@ -312,18 +313,70 @@ function browserTests() {
       proto.getShaderPrecisionFormat = getShaderPrecisionFormat;
     }
   });
+  passed.push(...(await window.runMarkerTests()));
   document.getElementById("result").textContent = JSON.stringify({ passed });
 }
 
 async function main() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "zet-graphics-test-"));
-  const html = `<!doctype html><pre id="result">running</pre><script>
+  const markerModules = [
+    "WebGLMarkerRenderer",
+    "MarkerAtlas",
+    "VehicleLayer",
+    "TrajectoryLayer",
+    "StopRenderer",
+    "url",
+  ]
+    .map((name) => {
+      const source = fs.readFileSync(
+        path.join(__dirname, `../src/${name}.ts`),
+        "utf8",
+      );
+      const compiled = ts.transpileModule(source, {
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          target: ts.ScriptTarget.ES2017,
+        },
+      }).outputText;
+      return `${JSON.stringify(`./${name}`)}: function(exports, require) { ${compiled} }`;
+    })
+    .join(",\n");
+  const maplibre = fs.readFileSync(require.resolve("maplibre-gl"));
+  const html = `<!doctype html><pre id="result">running</pre><script src="/maplibre.js"></script><script>
+    window.__DEV__ = false;
     window.diagnostics = {};
     (function(exports) { ${outputText} })(window.diagnostics);
-    try { (${browserTests.toString()})(); }
-    catch (error) { document.getElementById('result').textContent = JSON.stringify({error: error.stack}); }
+    const modules = { ${markerModules} }, cache = {};
+    function load(name) {
+      if (!cache[name]) { cache[name] = {}; modules[name](cache[name], load); }
+      return cache[name];
+    }
+    window.markerModules = {...load('./WebGLMarkerRenderer'), ...load('./MarkerAtlas'), ...load('./VehicleLayer')};
+    window.runMarkerTests = ${markerTests.toString()};
+    (${browserTests.toString()})().catch(error => {
+      document.getElementById('result').textContent = JSON.stringify({error: error.stack});
+    }).finally(() => {
+      fetch('/result', {method: 'POST', body: document.getElementById('result').textContent});
+    });
     </script>`;
-  const server = http.createServer((_request, response) => {
+  let reportResult;
+  const server = http.createServer((request, response) => {
+    if (request.url === "/result" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        response.end("OK");
+        reportResult(body);
+      });
+      return;
+    }
+    if (request.url === "/maplibre.js") {
+      response.setHeader("Content-Type", "application/javascript");
+      response.end(maplibre);
+      return;
+    }
     response.setHeader("Content-Type", "text/html");
     response.end(html);
   });
@@ -340,31 +393,38 @@ async function main() {
       "--use-angle=swiftshader",
       "--enable-unsafe-swiftshader",
       `--user-data-dir=${profile}`,
-      "--dump-dom",
       `http://127.0.0.1:${server.address().port}`,
     ]);
-    let stdout = "",
-      stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
+    let stderr = "";
+    child.stdout.resume();
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 60000);
-    const code = await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", resolve);
-    }).finally(() => clearTimeout(timeout));
-    assert.equal(code, 0, stderr);
-    const match = stdout.match(/<pre id="result">([\s\S]*?)<\/pre>/);
-    assert.ok(match, stdout);
-    const result = JSON.parse(
-      match[1]
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&amp;/g, "&"),
-    );
+    // Use wall-clock time: virtual-time budgets can expire before asynchronous
+    // MapLibre animation frames run. Chrome posts the result when tests finish.
+    let timeout;
+    const exited = new Promise((resolve) => child.once("close", resolve));
+    const result = await new Promise((resolve, reject) => {
+      reportResult = (body) => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      child.once("error", reject);
+      child.once("exit", (code) =>
+        reject(new Error(`Chrome exited (${code}): ${stderr}`)),
+      );
+      timeout = setTimeout(
+        () => reject(new Error(`Graphics tests timed out: ${stderr}`)),
+        60000,
+      );
+    }).finally(async () => {
+      clearTimeout(timeout);
+      child.kill("SIGKILL");
+      await exited;
+    });
     assert.ok(!result.error, result.error);
     console.log(result.passed.join("\n"));
     console.log(`${result.passed.length} graphics tests passed.`);

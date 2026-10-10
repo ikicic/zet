@@ -5,6 +5,7 @@
 Run `make test` from the repository root for Python and graphics tests.
 Requires Chrome/Chromium; set `CHROME_BIN` if the executable is not
 `google-chrome`. To run only graphics tests: `cd web && npm run test:graphics`.
+Add `?webgl=1` to the development-server URL to force the WebGL1 fallback.
 
 ## Feedback delivery
 

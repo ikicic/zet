@@ -33,8 +33,8 @@ and feedback configuration.
 
 ## Browser support
 
-The map requires WebGL2. If it cannot start, a support form lets you report the
-problem. You can review the browser and graphics diagnostics before sending.
+The map uses WebGL2, with a WebGL1 fallback for vehicles and labels on older
+devices. If it cannot start, a support form lets you report the problem.
 
 ## Sources
 
