@@ -70,7 +70,7 @@ export class VehicleLayer {
   private _atlas: MarkerAtlas | null = null;
   private atlasDpr = 0;
   private markerLayer: WebGLMarkerRenderer;
-  private trajectoryLayer: TrajectoryLayer | null = null;
+  private trajectoryLayer: TrajectoryLayer;
   private map: maplibregl.Map;
   private options: VehicleLayerOptions;
   private measureInitialAtlasBuild: boolean;
@@ -105,16 +105,11 @@ export class VehicleLayer {
     this.markerLayer = new WebGLMarkerRenderer();
     this.markerLayer.setFrameBuilder(() => this.buildMarkers());
     map.addLayer(this.markerLayer);
-    // Routes and stops still use WebGL2. Their absence must not stop vehicle
-    // rendering, filtering or selection on the WebGL1 fallback.
-    if (this.markerLayer.supportsWebGL2) {
-      const trajectoryLayer = new TrajectoryLayer();
-      this.trajectoryLayer = trajectoryLayer;
-      this.markerLayer.setBetweenMarkerGroups((gl) =>
-        trajectoryLayer.renderSelectedShape(gl),
-      );
-      map.addLayer(trajectoryLayer, this.markerLayer.id);
-    }
+    this.trajectoryLayer = new TrajectoryLayer();
+    this.markerLayer.setBetweenMarkerGroups((gl) =>
+      this.trajectoryLayer.renderSelectedShape(gl),
+    );
+    map.addLayer(this.trajectoryLayer, this.markerLayer.id);
 
     this.ensureAtlas();
     map.on("resize", this.onResize);
@@ -133,7 +128,7 @@ export class VehicleLayer {
     if (this.map.getLayer(this.markerLayer.id)) {
       this.map.removeLayer(this.markerLayer.id);
     }
-    if (this.trajectoryLayer && this.map.getLayer(this.trajectoryLayer.id)) {
+    if (this.map.getLayer(this.trajectoryLayer.id)) {
       this.map.removeLayer(this.trajectoryLayer.id);
     }
   }
@@ -149,7 +144,7 @@ export class VehicleLayer {
     this.highlightedRouteId = highlightedRouteId;
     this.selectedShape = selectedShape;
 
-    this.trajectoryLayer?.setData(
+    this.trajectoryLayer.setData(
       vehicles,
       filterSelection,
       highlightedRouteId,

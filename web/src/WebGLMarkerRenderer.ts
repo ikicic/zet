@@ -188,8 +188,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   private instanceCount = 0;
   private unselectedInstanceCount = 0;
   private frameBuilder: (() => void) | null = null;
-  private betweenMarkerGroups: ((gl: WebGL2RenderingContext) => void) | null =
-    null;
+  private betweenMarkerGroups: ((gl: GL) => void) | null = null;
 
   /** Called at the start of each custom-layer render, before drawing. */
   setFrameBuilder(fn: () => void) {
@@ -197,7 +196,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
   }
 
   /** Draws after unselected markers and before highlighted markers. */
-  setBetweenMarkerGroups(fn: (gl: WebGL2RenderingContext) => void) {
+  setBetweenMarkerGroups(fn: (gl: GL) => void) {
     this.betweenMarkerGroups = fn;
   }
 
@@ -361,7 +360,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
 
     const count = this.instanceCount;
     if (count === 0) {
-      if (this.gl2) this.betweenMarkerGroups?.(this.gl2);
+      this.betweenMarkerGroups?.(gl);
       return;
     }
 
@@ -396,7 +395,7 @@ export class WebGLMarkerRenderer implements maplibregl.CustomLayerInterface {
     gl.disable(gl.DEPTH_TEST);
 
     this.drawInstances(gl, 0, this.unselectedInstanceCount);
-    if (this.gl2) this.betweenMarkerGroups?.(this.gl2);
+    this.betweenMarkerGroups?.(gl);
 
     // The trajectory renderer changes the current program and buffer state.
     gl.useProgram(this.program);

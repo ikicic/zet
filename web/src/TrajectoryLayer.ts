@@ -3,7 +3,7 @@ import { RouteId, Vehicle, Shape } from "./Data";
 import { getMapDpr } from "./url";
 import { StopRenderer } from "./StopRenderer";
 
-type GL = WebGL2RenderingContext;
+type GL = WebGLRenderingContext | WebGL2RenderingContext;
 
 const VERTEX_SHADER_SOURCE = `
 precision highp float;
@@ -159,12 +159,25 @@ function createShader(gl: GL, type: number, source: string): WebGLShader {
 }
 
 function createProgram(gl: GL): WebGLProgram {
-  const vertexShader = createShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER_SOURCE);
-  const fragmentShader = createShader(
-    gl,
-    gl.FRAGMENT_SHADER,
-    FRAGMENT_SHADER_SOURCE,
-  );
+  const webgl2 =
+    typeof WebGL2RenderingContext !== "undefined" &&
+    gl instanceof WebGL2RenderingContext;
+  const mediump =
+    !webgl2 &&
+    !gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)?.precision;
+  // Keep screen positions high precision in the vertex shader. Only the small
+  // interpolated line distances need to reach low-precision fragment processors.
+  const vertexSource = mediump
+    ? VERTEX_SHADER_SOURCE.replace(/varying /g, "varying mediump ")
+    : VERTEX_SHADER_SOURCE;
+  const fragmentSource = mediump
+    ? FRAGMENT_SHADER_SOURCE.replace(
+        "precision highp float",
+        "precision mediump float",
+      )
+    : FRAGMENT_SHADER_SOURCE;
+  const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
   const program = gl.createProgram();
   if (!program) {
     throw new Error("Failed to create trajectory shader program");
@@ -461,8 +474,7 @@ export class TrajectoryLayer implements maplibregl.CustomLayerInterface {
     context: WebGLRenderingContext | WebGL2RenderingContext,
     _options: maplibregl.CustomRenderMethodInput,
   ) {
-    // VehicleLayer only installs trajectories on WebGL2 contexts.
-    const gl = context as GL;
+    const gl = context;
     if (!this.program || !this.buffer || !this.map) {
       return;
     }

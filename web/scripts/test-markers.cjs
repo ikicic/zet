@@ -266,8 +266,8 @@ module.exports = async function markerTests() {
         },
       });
       check(
-        !layers.has("vehicle-trajectories"),
-        "WebGL2-only layer was added to WebGL1",
+        layers.has("vehicle-trajectories"),
+        "WebGL1 trajectory layer is missing",
       );
       if (scenario.limit === Infinity) {
         check(
@@ -306,6 +306,7 @@ module.exports = async function markerTests() {
       ];
       const render = () => {
         gl1.clear(gl1.COLOR_BUFFER_BIT);
+        layers.get("vehicle-trajectories").render(gl1, {});
         layers.get("vehicle-markers").render(gl1, {});
         return capture(gl1);
       };
@@ -324,8 +325,37 @@ module.exports = async function markerTests() {
         alphaAt(50, 50) > 0 && alphaAt(120, 120) > 0,
         "DPR-scaled marker locations are wrong",
       );
+      layer.setData(
+        [
+          {
+            routeId: 7,
+            lon: [5, 60],
+            lat: [15, 15],
+            timestamp: [0, 1],
+            directionDegrees: 0,
+          },
+        ],
+        new Set(),
+        null,
+        { lons: [10, 65], lats: [45, 45], stops: { lons: [30], lats: [45] } },
+      );
+      const overlays = render();
+      const rgba = (x, y) =>
+        overlays.slice(
+          ((159 - y) * 160 + x) * 4,
+          ((159 - y) * 160 + x) * 4 + 4,
+        );
+      const trail = rgba(40, 30),
+        route = rgba(40, 90),
+        stop = rgba(60, 90);
+      check(
+        trail[0] > 100 && trail[0] > trail[1] * 1.5,
+        "Fallback trail is invisible",
+      );
+      check(route[0] < 5 && route[3] > 240, "Fallback route is invisible");
+      check(stop[0] > 240 && stop[3] > 240, "Fallback stop is invisible");
       passed.push(
-        `WebGL1 VehicleLayer preserves filtering, selection, highlights and DPR (${scenario.name})`,
+        `WebGL1 vehicles and overlays preserve filtering, selection, highlights and DPR (${scenario.name})`,
       );
     } finally {
       layer?.destroy();
@@ -362,6 +392,7 @@ module.exports = async function markerTests() {
   }
 
   // Verify automatic fallback and custom-layer state integration in both contexts.
+  const overlaySnapshots = [];
   for (const type of ["webgl2", "webgl"]) {
     const getContext = HTMLCanvasElement.prototype.getContext;
     const container = document.createElement("div");
@@ -414,33 +445,117 @@ module.exports = async function markerTests() {
         onVehicleClick() {},
         onNothingClick() {},
       });
-      vehicles.setData(
-        [
-          {
-            routeId: 6,
-            lon: [15.98],
-            lat: [45.81],
-            timestamp: [0],
-            directionDegrees: 0,
-          },
-        ],
-        new Set(),
-        null,
-        null,
-      );
+      const coordinates = (points) =>
+        points.map((point) => map.unproject(point));
+      const vehicle = (routeId, points) => {
+        const coords = coordinates(points);
+        return {
+          routeId,
+          lon: coords.map((p) => p.lng),
+          lat: coords.map((p) => p.lat),
+          timestamp: coords.map(() => 0),
+          directionDegrees: 0,
+        };
+      };
+      const route = coordinates([
+        [20, 100],
+        [140, 100],
+      ]);
+      const stops = coordinates([
+        [60, 100],
+        [110, 100],
+      ]);
+      const shape = {
+        lons: route.map((p) => p.lng),
+        lats: route.map((p) => p.lat),
+        stops: { lons: stops.map((p) => p.lng), lats: stops.map((p) => p.lat) },
+      };
+      const fleet = [
+        vehicle(6, [
+          [20, 30],
+          [90, 30],
+          [90, 100],
+        ]),
+        vehicle(7, [[110, 100]]),
+        vehicle(8, [
+          [20, 140],
+          [60, 140],
+        ]),
+      ];
+      vehicles.setData(fleet, new Set(), 7, shape);
       await new Promise((resolve) => map.once("render", resolve));
       const context = map.getCanvas().getContext(type);
       check(
-        context &&
-          Boolean(map.getLayer("vehicle-trajectories")) === (type === "webgl2"),
+        context && map.getLayer("vehicle-trajectories"),
         `MapLibre did not choose the ${type} layers`,
       );
       const pixels = capture(context);
+      const pixelAt = (image, x, y) => {
+        const dpr = map.getCanvas().width / 160;
+        const offset =
+          ((map.getCanvas().height - 1 - Math.floor(y * dpr)) *
+            map.getCanvas().width +
+            Math.floor(x * dpr)) *
+          4;
+        return image.slice(offset, offset + 4);
+      };
+      const red = (pixel) => pixel[0] > 100 && pixel[0] > pixel[1] * 1.5;
+      check(red(pixelAt(pixels, 40, 30)), `${type}: red trail is missing`);
+      check(
+        pixelAt(pixels, 30, 100)[0] < 5,
+        `${type}: selected route is missing`,
+      );
+      check(
+        pixelAt(pixels, 60, 100)[0] > 240,
+        `${type}: stop is not above the route`,
+      );
+      check(
+        pixelAt(pixels, 64, 100)[0] < 50,
+        `${type}: stop outline is missing`,
+      );
+      check(
+        pixelAt(pixels, 90, 100)[0] < 5,
+        `${type}: route is not above unselected vehicles`,
+      );
+      check(
+        pixelAt(pixels, 110, 106)[0] > 50,
+        `${type}: highlighted vehicle is missing`,
+      );
+      // The stop at this vehicle's center must be covered by its tinted marker.
+      check(
+        pixelAt(pixels, 111, 102)[0] < 240,
+        `${type}: stop covered the highlighted vehicle`,
+      );
+      overlaySnapshots.push(pixels);
       check(
         pixels.some((value, index) => index % 4 !== 3 && value > 100),
         "MapLibre fallback vehicle is invisible",
       );
-      passed.push(`MapLibre ${type} integration displays vehicles and labels`);
+      vehicles.setData(fleet, new Set([7]), 7, shape);
+      await new Promise((resolve) => map.once("render", resolve));
+      const filtered = capture(context);
+      check(
+        !red(pixelAt(filtered, 40, 30)) && !red(pixelAt(filtered, 40, 140)),
+        `${type}: filtering left trails visible`,
+      );
+      vehicles.setData([], new Set(), null, shape);
+      await new Promise((resolve) => map.once("render", resolve));
+      const empty = capture(context);
+      check(
+        pixelAt(empty, 30, 100)[0] < 5 && pixelAt(empty, 60, 100)[0] > 240,
+        `${type}: route and stops disappeared without vehicle markers`,
+      );
+      vehicles.setData([], new Set(), null, null);
+      await new Promise((resolve) => map.once("render", resolve));
+      const cleared = capture(context);
+      check(
+        pixelAt(cleared, 30, 100)[0] === 16 &&
+          pixelAt(cleared, 60, 100)[0] === 16,
+        `${type}: deselected route or stops remain visible`,
+      );
+      passed.push(
+        `MapLibre ${type}: trails, routes, stops, filtering and drawing order`,
+      );
     } finally {
       HTMLCanvasElement.prototype.getContext = getContext;
       vehicles?.destroy();
@@ -448,5 +563,11 @@ module.exports = async function markerTests() {
       container.remove();
     }
   }
+  compare(
+    overlaySnapshots[1],
+    overlaySnapshots[0],
+    "WebGL1 overlays differ from WebGL2",
+  );
+  passed.push("WebGL1 routes, trails and stops match WebGL2 pixels");
   return passed;
 };

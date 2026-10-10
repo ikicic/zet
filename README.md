@@ -33,8 +33,8 @@ and feedback configuration.
 
 ## Browser support
 
-The map uses WebGL2, with a WebGL1 fallback for vehicles and labels on older
-devices. If it cannot start, a support form lets you report the problem.
+The map uses WebGL2, with a WebGL1 fallback on older devices. If it cannot start,
+a support form lets you report the problem.
 
 ## Sources
 
