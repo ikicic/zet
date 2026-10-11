@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-  BigStaticData,
   CompressedBigStaticData,
   Vehicle,
   CompressedRealTimeState,
@@ -46,6 +45,8 @@ import {
   removeLegacyNewsStorage,
 } from "./News";
 import { useLocalStorage } from "./useLocalStorage";
+import { useAsyncData } from "./useAsyncData";
+import { fetchJson, isRetryableFetchError } from "./fetchJson";
 
 const URL_PARAMS = new URLSearchParams(window.location.search);
 const PERFORMANCE_MODE = URL_PARAMS.get("perf") === "1";
@@ -72,11 +73,6 @@ function setLocationTrackingEnabled(enabled: boolean) {
   }
 }
 
-interface LoadedBigStaticData {
-  key: string;
-  data: BigStaticData;
-}
-
 interface LoadedSmallStaticData {
   key: string;
   data: SmallStaticData;
@@ -100,25 +96,8 @@ class HighlightedVehicleCriterion {
 
 async function fetchBigStaticData(key: string) {
   const url = getHttpUrl(`static/big/v1/${key}`);
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const compressedData: CompressedBigStaticData = await response.json();
+  const compressedData = await fetchJson<CompressedBigStaticData>(url);
   return decompressBigStaticData(compressedData);
-}
-
-async function getSelectedShape(
-  shapeId: string,
-  activeStaticKey: string,
-  cached: LoadedBigStaticData | null,
-): Promise<{ loaded: LoadedBigStaticData; shape: Shape | null }> {
-  const loaded =
-    cached?.key === activeStaticKey
-      ? cached
-      : {
-          key: activeStaticKey,
-          data: await fetchBigStaticData(activeStaticKey),
-        };
-  return { loaded, shape: loaded.data.shapes[shapeId] || null };
 }
 
 async function fetchSmallStaticData(key: string) {
@@ -146,11 +125,16 @@ export function Map() {
   const vehicleLayerRef = useRef<VehicleLayer | null>(null);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
-  const [loadedBigStaticData, setLoadedBigStaticData] =
-    useState<LoadedBigStaticData | null>(null);
   const [loadedSmallStaticData, setLoadedSmallStaticData] =
     useState<LoadedSmallStaticData | null>(null);
-  const [selectedShape, setSelectedShape] = useState<Shape | null>(null);
+  const { data: bigStaticData, error: bigStaticError } = useAsyncData(
+    selectedShapeId ? activeStaticKey : null,
+    fetchBigStaticData,
+    { shouldRetry: isRetryableFetchError },
+  );
+  const selectedShape = selectedShapeId
+    ? bigStaticData?.shapes[selectedShapeId] ?? null
+    : null;
   const selectedShapeRef = useRef<Shape | null>(null);
   const realTimeData = useRef<RealTimeState | null>(null);
   const highlightedVehicleCriterion = useRef<HighlightedVehicleCriterion>(
@@ -551,7 +535,6 @@ export function Map() {
             setSelectedShapeId(null);
             highlightedVehicleCriterion.current.setSelectedRouteId(null);
             selectedShapeRef.current = null;
-            setSelectedShape(null);
             redraw();
           },
           measureInitialAtlasBuild: PERFORMANCE_MODE,
@@ -612,30 +595,15 @@ export function Map() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    selectedShapeRef.current = null;
-    setSelectedShape(null);
-    redraw();
-    if (!selectedShapeId || !activeStaticKey) return;
-
-    getSelectedShape(selectedShapeId, activeStaticKey, loadedBigStaticData)
-      .then(({ loaded, shape }) => {
-        if (cancelled) return;
-        setLoadedBigStaticData(loaded);
-        selectedShapeRef.current = shape;
-        setSelectedShape(shape);
-      })
-      .catch((error) => {
-        if (!cancelled) console.error("Could not load route and stops:", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedShapeId, activeStaticKey, loadedBigStaticData]);
-
-  useEffect(() => {
+    selectedShapeRef.current = selectedShape;
     redraw();
   }, [selectedShape]);
+
+  useEffect(() => {
+    if (bigStaticError !== null) {
+      console.error("Could not load route and stops:", bigStaticError);
+    }
+  }, [bigStaticError]);
 
   useEffect(() => {
     if (activeStaticKey == null) {

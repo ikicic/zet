@@ -8,6 +8,8 @@ const http = require("node:http");
 const { spawn } = require("node:child_process");
 const ts = require("typescript");
 const markerTests = require("./test-markers.cjs");
+const selectionTests = require("./test-selection.cjs");
+const retryTests = require("./test-async-retries.cjs");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../src/GraphicsDiagnostics.ts"),
@@ -314,6 +316,8 @@ async function browserTests() {
     }
   });
   passed.push(...(await window.runMarkerTests()));
+  passed.push(...(await window.runSelectionTests()));
+  passed.push(...(await window.runRetryTests()));
   document.getElementById("result").textContent = JSON.stringify({ passed });
 }
 
@@ -326,10 +330,16 @@ async function main() {
     "TrajectoryLayer",
     "StopRenderer",
     "url",
+    "useAsyncData",
+    "fetchJson",
+    "Data",
   ]
     .map((name) => {
       const source = fs.readFileSync(
-        path.join(__dirname, `../src/${name}.ts`),
+        path.join(
+          __dirname,
+          `../src/${name}.${name === "Data" ? "tsx" : "ts"}`,
+        ),
         "utf8",
       );
       const compiled = ts.transpileModule(source, {
@@ -342,19 +352,37 @@ async function main() {
     })
     .join(",\n");
   const maplibre = fs.readFileSync(require.resolve("maplibre-gl"));
+  const reactModules = [
+    ["react", "react", "react.development.js"],
+    ["react-dom", "react-dom", "react-dom.development.js"],
+    ["react-dom/client", "react-dom", "react-dom-client.development.js"],
+    ["scheduler", "scheduler", "scheduler.development.js"],
+  ]
+    .map(([name, pkg, file]) => {
+      const source = fs.readFileSync(
+        path.join(path.dirname(require.resolve(pkg)), "cjs", file),
+        "utf8",
+      );
+      return `${JSON.stringify(name)}: function(exports, require) { const process = {env: {NODE_ENV: 'development'}}; ${source} }`;
+    })
+    .join(",\n");
   const html = `<!doctype html><pre id="result">running</pre><script src="/maplibre.js"></script><script>
     window.__DEV__ = false;
     window.diagnostics = {};
     (function(exports) { ${outputText} })(window.diagnostics);
-    const modules = { ${markerModules} }, cache = {};
+    const modules = { ${markerModules}, ${reactModules} }, cache = {};
     function load(name) {
       if (!cache[name]) { cache[name] = {}; modules[name](cache[name], load); }
       return cache[name];
     }
     window.markerModules = {...load('./WebGLMarkerRenderer'), ...load('./MarkerAtlas'), ...load('./VehicleLayer')};
     window.runMarkerTests = ${markerTests.toString()};
+    window.selectionModules = {React: load('react'), ...load('react-dom/client'), ...load('./useAsyncData'), ...load('./fetchJson'), ...load('./Data')};
+    window.runSelectionTests = ${selectionTests.toString()};
+    window.runRetryTests = ${retryTests.toString()};
     (${browserTests.toString()})().catch(error => {
-      document.getElementById('result').textContent = JSON.stringify({error: error.stack});
+      const describe = error => error.stack + (error.errors ? '\\n' + error.errors.map(describe).join('\\n') : '');
+      document.getElementById('result').textContent = JSON.stringify({error: describe(error)});
     }).finally(() => {
       fetch('/result', {method: 'POST', body: document.getElementById('result').textContent});
     });
