@@ -35,6 +35,9 @@ function makeState(count) {
 
   return JSON.stringify({
     vehicles: {
+      vehicleIds: routeIds.map(String),
+      tripIds: routeIds.map((routeId) => `stress-${routeId}`),
+      blockIds: routeIds.map(() => null),
       routeIds,
       shapeIds,
       timestamps,

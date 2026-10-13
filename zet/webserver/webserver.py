@@ -94,6 +94,7 @@ class ParsedVehicle:
     timestamp: int
     lat: float
     lon: float
+    vehicle_id: str | None = None
 
 
 @dataclass
@@ -128,6 +129,7 @@ class ParsedFeed:
                 timestamp=int(vehicle['timestamp']),
                 lat=vehicle['position']['latitude'],
                 lon=vehicle['position']['longitude'],
+                vehicle_id=vehicle.get('vehicle', {}).get('id') or None,
             )
         except (KeyError, ValueError) as e:
             logger.error(f"Error parsing vehicle: {e}")
@@ -145,6 +147,9 @@ class Vehicle:
 
     # How many times did the feed not contain the vehicle.
     no_update_counter: int = 0
+    vehicle_id: str | None = None
+    trip_id: TripId | None = None
+    block_id: str | None = None
 
     @staticmethod
     def from_parsed_vehicle(
@@ -163,7 +168,11 @@ class Vehicle:
             shape_id=shape_id,
             timestamp=vehicle.timestamp,
             lat=[],
-            lon=[])
+            lon=[],
+            vehicle_id=vehicle.vehicle_id,
+            trip_id=vehicle.trip_id,
+            block_id=(static_data.trip_to_block_id.get(vehicle.trip_id)
+                      if static_data else None))
 
     def update(self,
                vehicle: ParsedVehicle,
@@ -176,6 +185,10 @@ class Vehicle:
         self.timestamp = vehicle.timestamp
         self.no_update_counter = 0
         self.direction_radians = self.compute_direction(self.lat, self.lon)
+        self.vehicle_id = vehicle.vehicle_id
+        self.trip_id = vehicle.trip_id
+        self.block_id = (static_data.trip_to_block_id.get(vehicle.trip_id)
+                         if static_data else None)
 
         # If for any reason the static data for a given vehicle arrives after
         # the realtime data, update the shape_id.
@@ -230,6 +243,9 @@ class Vehicle:
         return {
             'routeIds': [v.route_id for v in vehicles],
             'shapeIds': [v.shape_id for v in vehicles],
+            'vehicleIds': [v.vehicle_id for v in vehicles],
+            'tripIds': [v.trip_id for v in vehicles],
+            'blockIds': [v.block_id for v in vehicles],
             'timestamps': ref.compress_timestamps([v.timestamp for v in vehicles]),
             'compressedLats': compressed_lats,
             'compressedLons': compressed_lons,
@@ -239,7 +255,7 @@ class Vehicle:
 
 @dataclass
 class RealtimeState:
-    vehicles: dict[TripId, Vehicle]
+    vehicles: dict[tuple[str | None, TripId], Vehicle]
     timestamp: int
     active_static_key: str | None
 
@@ -254,10 +270,14 @@ class RealtimeState:
         static_data = (active_static_snapshot.static_data
                        if active_static_snapshot else None)
         for vehicle in feed.vehicles:
-            v = self.vehicles.get(vehicle.trip_id)
+            # Vehicles can share a trip. Keep their trails separate, while a
+            # new trip starts fresh route, shape and trajectory state. Without
+            # a vehicle ID, retain the existing per-trip identity.
+            key = (vehicle.vehicle_id, vehicle.trip_id)
+            v = self.vehicles.get(key)
             if v is None:
                 v = Vehicle.from_parsed_vehicle(vehicle, static_data)
-                self.vehicles[vehicle.trip_id] = v
+                self.vehicles[key] = v
             v.update(vehicle, static_data)
 
         # Remove vehicles not in last 30 feeds.
@@ -374,6 +394,7 @@ class StaticData:
     calendar_dates: set[datetime.date]
     stops: dict[str, tuple[float, float]] = field(default_factory=dict)
     shape_stop_ids: dict[ShapeId, list[str]] = field(default_factory=dict)
+    trip_to_block_id: dict[TripId, str] = field(default_factory=dict)
 
     @staticmethod
     def from_gzipped_data(gzipped_data: bytes) -> 'StaticData':
@@ -382,13 +403,16 @@ class StaticData:
     @staticmethod
     def from_zip_data(raw_data: bytes) -> 'StaticData':
         with zipfile.ZipFile(io.BytesIO(raw_data)) as zip_file:
-            trip_to_shape_id = {
-                row['trip_id']: row['shape_id']
-                for row in _read_gtfs_rows(zip_file, 'trips.txt')
-            }
+            trip_to_shape_id = {}
+            trip_to_block_id = {}
+            for row in _read_gtfs_rows(zip_file, 'trips.txt'):
+                trip_to_shape_id[row['trip_id']] = row['shape_id']
+                if row.get('block_id'):
+                    trip_to_block_id[row['trip_id']] = row['block_id']
             shapes = StaticData._read_shapes(zip_file)
             return StaticData(
                 trip_to_shape_id=trip_to_shape_id,
+                trip_to_block_id=trip_to_block_id,
                 shapes=shapes,
                 route_ids=StaticData._read_route_ids(zip_file),
                 calendar_dates=StaticData._read_calendar_dates(zip_file),

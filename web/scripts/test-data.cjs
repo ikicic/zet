@@ -25,6 +25,9 @@ const decoded = api.decompressBigStaticData({
 });
 const realtime = api.decompressRealTimeState({
   vehicles: {
+    vehicleIds: ["102202"],
+    tripIds: ["trip"],
+    blockIds: ["206"],
     routeIds: [6],
     shapeIds: ["route"],
     timestamps: [0],

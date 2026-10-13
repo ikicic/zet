@@ -62,6 +62,57 @@ class StaticSnapshotTest(unittest.TestCase):
         # Construction starts no threads and makes no network requests.
         self.server = GtfsServer('ws://example.invalid')
 
+    def test_vehicle_details_reach_realtime_payload_and_refresh_with_static_data(self):
+        feed = gtfs_realtime_pb2.FeedMessage()
+        feed.header.gtfs_realtime_version = '2.0'
+        feed.header.timestamp = int(datetime.datetime(
+            2026, 1, 3, 12, tzinfo=datetime.timezone.utc).timestamp())
+        for trip_id, vehicle_id in [('trip', '102202'), ('other', '00395')]:
+            entity = feed.entity.add()
+            entity.id = f'entity-{vehicle_id}'
+            entity.vehicle.vehicle.id = vehicle_id
+            entity.vehicle.trip.trip_id = trip_id
+            entity.vehicle.trip.route_id = '6'
+            entity.vehicle.timestamp = feed.header.timestamp
+            entity.vehicle.position.latitude = 45.815
+            entity.vehicle.position.longitude = 15.9819
+
+        def vehicles():
+            _, message = self.server.process_feed(feed)
+            return json.loads(message.version2)['vehicles']
+
+        initial = vehicles()
+        self.assertEqual(initial['vehicleIds'], ['102202', '00395'])
+        self.assertEqual(initial['tripIds'], ['trip', 'other'])
+        self.assertEqual(initial['blockIds'], [None, None])
+
+        # Two trips share a shape, but their blocks are distinct. The trip IDs
+        # deliberately contain no block information to prevent guessed parsing.
+        load_archive(self.server, make_archive(6, overrides={
+            'trips.txt': ('trip_id,shape_id,block_id\n'
+                          'trip,shape,206\nother,shape,006\n'),
+        }))
+        feed.header.timestamp += 1
+        enriched = vehicles()
+        self.assertEqual(enriched['blockIds'], ['206', '006'])
+        self.assertEqual(enriched['vehicleIds'], ['102202', '00395'])
+        self.assertEqual(enriched['shapeIds'], ['shape', 'shape'])
+
+        # Missing optional fields must not hide vehicles or retain stale values.
+        load_archive(self.server, make_archive(6))
+        feed.entity[0].vehicle.ClearField('vehicle')
+        feed.header.timestamp += 1
+        missing = vehicles()
+        self.assertEqual(dict(zip(missing['tripIds'], missing['vehicleIds'])),
+                         {'trip': None, 'other': '00395'})
+        self.assertEqual(missing['blockIds'], [None, None])
+
+    def test_blank_block_id_is_unavailable(self):
+        data = StaticData.from_zip_data(make_archive(6, overrides={
+            'trips.txt': 'trip_id,shape_id,block_id\ntrip,shape,\n',
+        }))
+        self.assertEqual(data.trip_to_block_id, {})
+
     def test_stops_are_ordered_and_shared_between_shapes(self):
         data = StaticData.from_zip_data(make_archive(6, overrides={
             'trips.txt': ('trip_id,shape_id\ntrip,shape\n'

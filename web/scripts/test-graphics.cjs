@@ -10,6 +10,7 @@ const ts = require("typescript");
 const markerTests = require("./test-markers.cjs");
 const selectionTests = require("./test-selection.cjs");
 const retryTests = require("./test-async-retries.cjs");
+const vehicleDetailsTests = require("./test-vehicle-details.cjs");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../src/GraphicsDiagnostics.ts"),
@@ -318,6 +319,7 @@ async function browserTests() {
   passed.push(...(await window.runMarkerTests()));
   passed.push(...(await window.runSelectionTests()));
   passed.push(...(await window.runRetryTests()));
+  passed.push(...(await window.runVehicleDetailsTests()));
   document.getElementById("result").textContent = JSON.stringify({ passed });
 }
 
@@ -333,6 +335,7 @@ async function main() {
     "useAsyncData",
     "fetchJson",
     "Data",
+    "VehicleDetails",
   ]
     .map((name) => {
       const source = fs.readFileSync(
@@ -366,12 +369,17 @@ async function main() {
       return `${JSON.stringify(name)}: function(exports, require) { const process = {env: {NODE_ENV: 'development'}}; ${source} }`;
     })
     .join(",\n");
-  const html = `<!doctype html><pre id="result">running</pre><script src="/maplibre.js"></script><script>
+  const maplibreCss = fs.readFileSync(
+    require.resolve("maplibre-gl/dist/maplibre-gl.css"),
+  );
+  const mapCss = fs.readFileSync(path.join(__dirname, "../src/Map.css"));
+  const html = `<!doctype html><link rel="stylesheet" href="/maplibre.css"><link rel="stylesheet" href="/map.css"><pre id="result">running</pre><script src="/maplibre.js"></script><script>
     window.__DEV__ = false;
     window.diagnostics = {};
     (function(exports) { ${outputText} })(window.diagnostics);
     const modules = { ${markerModules}, ${reactModules} }, cache = {};
     function load(name) {
+      if (name === 'maplibre-gl') return window.maplibregl;
       if (!cache[name]) { cache[name] = {}; modules[name](cache[name], load); }
       return cache[name];
     }
@@ -380,6 +388,8 @@ async function main() {
     window.selectionModules = {React: load('react'), ...load('react-dom/client'), ...load('./useAsyncData'), ...load('./fetchJson'), ...load('./Data')};
     window.runSelectionTests = ${selectionTests.toString()};
     window.runRetryTests = ${retryTests.toString()};
+    window.vehicleDetailsModules = {...load('./VehicleDetails'), ...load('./Data')};
+    window.runVehicleDetailsTests = ${vehicleDetailsTests.toString()};
     (${browserTests.toString()})().catch(error => {
       const describe = error => error.stack + (error.errors ? '\\n' + error.errors.map(describe).join('\\n') : '');
       document.getElementById('result').textContent = JSON.stringify({error: describe(error)});
@@ -403,6 +413,16 @@ async function main() {
     if (request.url === "/maplibre.js") {
       response.setHeader("Content-Type", "application/javascript");
       response.end(maplibre);
+      return;
+    }
+    if (request.url === "/maplibre.css") {
+      response.setHeader("Content-Type", "text/css");
+      response.end(maplibreCss);
+      return;
+    }
+    if (request.url === "/map.css") {
+      response.setHeader("Content-Type", "text/css");
+      response.end(mapCss);
       return;
     }
     response.setHeader("Content-Type", "text/html");

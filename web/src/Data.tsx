@@ -45,6 +45,9 @@ export interface CompressedSmallStaticData {
 }
 
 export interface Vehicle {
+  vehicleId: string | null;
+  tripId: string | null;
+  blockId: string | null;
   routeId: RouteId;
   shapeId: ShapeId;
   lat: number[];
@@ -60,6 +63,9 @@ export interface RealTimeState {
 }
 
 export interface CompressedVehicles {
+  vehicleIds: (string | null)[];
+  tripIds: (string | null)[];
+  blockIds: (string | null)[];
   routeIds: RouteId[];
   shapeIds: ShapeId[];
   timestamps: number[];
@@ -105,6 +111,9 @@ function decompressVehicles(data: CompressedVehicles): Vehicle[] {
   const vehicles: Vehicle[] = [];
   for (let i = 0, n = data.routeIds.length; i < n; ++i) {
     vehicles.push({
+      vehicleId: data.vehicleIds[i],
+      tripId: data.tripIds[i],
+      blockId: data.blockIds[i],
       routeId: data.routeIds[i],
       shapeId: data.shapeIds[i],
       lat: STATIC_REFERENCE_SYSTEM.decompress_lats(data.compressedLats[i]),

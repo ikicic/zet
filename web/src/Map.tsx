@@ -29,6 +29,7 @@ import {
   MapFailure,
 } from "./GraphicsDiagnostics";
 import { VehicleLayer } from "./VehicleLayer";
+import { findSelectedVehicle } from "./VehicleDetails";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
@@ -114,6 +115,7 @@ export function Map() {
   const [mapFailure, setMapFailure] = useState<MapFailure | null>(null);
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [showFilter, setShowFilter] = useState<boolean>(false);
+  const selectedVehicleRef = useRef<Vehicle | null>(null);
 
   const [filterState, setFilterState] = useFilterState("zet-filter-state", {
     selection: new Set(),
@@ -133,7 +135,7 @@ export function Map() {
     { shouldRetry: isRetryableFetchError },
   );
   const selectedShape = selectedShapeId
-    ? bigStaticData?.shapes[selectedShapeId] ?? null
+    ? (bigStaticData?.shapes[selectedShapeId] ?? null)
     : null;
   const selectedShapeRef = useRef<Shape | null>(null);
   const realTimeData = useRef<RealTimeState | null>(null);
@@ -235,8 +237,35 @@ export function Map() {
       ? filterStateRef.current.selection
       : new Set<RouteId>();
 
+    const previousVehicle = selectedVehicleRef.current;
+    const selectedVehicle = findSelectedVehicle(
+      realTimeData.current.vehicles,
+      previousVehicle,
+    );
+    // Keep the last identity through feed gaps; only the current match is shown.
+    if (selectedVehicle) selectedVehicleRef.current = selectedVehicle;
+    if (
+      previousVehicle &&
+      selectedVehicle &&
+      (previousVehicle.routeId !== selectedVehicle.routeId ||
+        previousVehicle.shapeId !== selectedVehicle.shapeId)
+    ) {
+      highlightedVehicleCriterion.current.setSelectedRouteId(
+        selectedVehicle.routeId,
+      );
+      if (previousVehicle.shapeId !== selectedVehicle.shapeId) {
+        selectedShapeRef.current = null;
+        setSelectedShapeId(selectedVehicle.shapeId);
+      }
+    }
     const highlightedRouteId =
       highlightedVehicleCriterion.current.getSelectedRouteId();
+    const visibleVehicles = realTimeData.current.vehicles.filter(
+      (vehicle) =>
+        vehicle.routeId === highlightedRouteId ||
+        activeSelection.size === 0 ||
+        activeSelection.has(vehicle.routeId),
+    );
 
     if (vehicleLayerRef.current) {
       vehicleLayerRef.current.setData(
@@ -248,12 +277,7 @@ export function Map() {
     }
 
     // Determine if any markers are visible for the filter control
-    const anyVisible = realTimeData.current.vehicles.some((v) => {
-      const highlighted = highlightedVehicleCriterion.current.isHighlighted(v);
-      const hidden =
-        activeSelection.size > 0 && !activeSelection.has(v.routeId);
-      return !hidden || highlighted;
-    });
+    const anyVisible = visibleVehicles.length > 0;
     anyMarkerVisibleRef.current = anyVisible;
 
     if (filterControlRef.current != null) {
@@ -269,22 +293,14 @@ export function Map() {
     if (collisionSource) {
       collisionSource.setData({
         type: "FeatureCollection",
-        features: realTimeData.current.vehicles
-          .filter((v) => {
-            const highlighted =
-              highlightedVehicleCriterion.current.isHighlighted(v);
-            const hidden =
-              activeSelection.size > 0 && !activeSelection.has(v.routeId);
-            return !hidden || highlighted;
-          })
-          .map((v) => ({
-            type: "Feature",
-            geometry: {
-              type: "Point",
-              coordinates: [v.lon[v.lon.length - 1], v.lat[v.lat.length - 1]],
-            },
-            properties: {},
-          })),
+        features: visibleVehicles.map((v) => ({
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [v.lon[v.lon.length - 1], v.lat[v.lat.length - 1]],
+          },
+          properties: {},
+        })),
       });
     }
   };
@@ -524,6 +540,7 @@ export function Map() {
 
         const vehicleLayer = new VehicleLayer(map, {
           onVehicleClick: (vehicle) => {
+            selectedVehicleRef.current = vehicle;
             setSelectedShapeId(vehicle.shapeId);
             highlightedVehicleCriterion.current.setSelectedRouteId(
               vehicle.routeId,
@@ -532,6 +549,7 @@ export function Map() {
             redraw();
           },
           onNothingClick: () => {
+            selectedVehicleRef.current = null;
             setSelectedShapeId(null);
             highlightedVehicleCriterion.current.setSelectedRouteId(null);
             selectedShapeRef.current = null;
