@@ -11,6 +11,8 @@ const markerTests = require("./test-markers.cjs");
 const selectionTests = require("./test-selection.cjs");
 const retryTests = require("./test-async-retries.cjs");
 const vehicleDetailsTests = require("./test-vehicle-details.cjs");
+const appUpdateTests = require("./test-app-updates.cjs");
+const recoveryTests = require("./test-map-recovery.cjs");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../src/GraphicsDiagnostics.ts"),
@@ -320,35 +322,30 @@ async function browserTests() {
   passed.push(...(await window.runSelectionTests()));
   passed.push(...(await window.runRetryTests()));
   passed.push(...(await window.runVehicleDetailsTests()));
+  passed.push(...(await window.runAppUpdateTests()));
+  passed.push(...(await window.runRecoveryTests()));
   document.getElementById("result").textContent = JSON.stringify({ passed });
 }
 
 async function main() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "zet-graphics-test-"));
-  const markerModules = [
-    "WebGLMarkerRenderer",
-    "MarkerAtlas",
-    "VehicleLayer",
-    "TrajectoryLayer",
-    "StopRenderer",
-    "url",
-    "useAsyncData",
-    "fetchJson",
-    "Data",
-    "VehicleDetails",
-  ]
-    .map((name) => {
+  const markerModules = fs
+    .readdirSync(path.join(__dirname, "../src"))
+    .filter(
+      (file) =>
+        /\.tsx?$/.test(file) && !file.endsWith(".d.ts") && file !== "Index.tsx",
+    )
+    .map((file) => {
+      const name = file.replace(/\.tsx?$/, "");
       const source = fs.readFileSync(
-        path.join(
-          __dirname,
-          `../src/${name}.${name === "Data" ? "tsx" : "ts"}`,
-        ),
+        path.join(__dirname, `../src/${file}`),
         "utf8",
       );
       const compiled = ts.transpileModule(source, {
         compilerOptions: {
           module: ts.ModuleKind.CommonJS,
           target: ts.ScriptTarget.ES2017,
+          jsx: ts.JsxEmit.ReactJSX,
         },
       }).outputText;
       return `${JSON.stringify(`./${name}`)}: function(exports, require) { ${compiled} }`;
@@ -357,6 +354,7 @@ async function main() {
   const maplibre = fs.readFileSync(require.resolve("maplibre-gl"));
   const reactModules = [
     ["react", "react", "react.development.js"],
+    ["react/jsx-runtime", "react", "react-jsx-runtime.development.js"],
     ["react-dom", "react-dom", "react-dom.development.js"],
     ["react-dom/client", "react-dom", "react-dom-client.development.js"],
     ["scheduler", "scheduler", "scheduler.development.js"],
@@ -380,6 +378,8 @@ async function main() {
     const modules = { ${markerModules}, ${reactModules} }, cache = {};
     function load(name) {
       if (name === 'maplibre-gl') return window.maplibregl;
+      if (name.endsWith('.css')) return {};
+      if (name.endsWith('?url')) return {default: '/test-style.json'};
       if (!cache[name]) { cache[name] = {}; modules[name](cache[name], load); }
       return cache[name];
     }
@@ -390,6 +390,10 @@ async function main() {
     window.runRetryTests = ${retryTests.toString()};
     window.vehicleDetailsModules = {...load('./VehicleDetails'), ...load('./Data')};
     window.runVehicleDetailsTests = ${vehicleDetailsTests.toString()};
+    window.appUpdateModules = load('./AppUpdates');
+    window.runAppUpdateTests = ${appUpdateTests.toString()};
+    window.recoveryModules = {load, React: load('react'), ...load('react-dom/client')};
+    window.runRecoveryTests = ${recoveryTests.toString()};
     (${browserTests.toString()})().catch(error => {
       const describe = error => error.stack + (error.errors ? '\\n' + error.errors.map(describe).join('\\n') : '');
       document.getElementById('result').textContent = JSON.stringify({error: describe(error)});

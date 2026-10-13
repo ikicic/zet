@@ -2,10 +2,20 @@
 
 ## Tests
 
-Run `make test` from the repository root for Python and graphics tests.
+Run `make test` from the repository root for Python, build and browser tests.
 Requires Chrome/Chromium; set `CHROME_BIN` if the executable is not
 `google-chrome`. To run only graphics tests: `cd web && npm run test:graphics`.
 Add `?webgl=1` to the development-server URL to force the WebGL1 fallback.
+
+## Frontend releases
+
+Builds emit `version.json`. The server announces it over WebSocket. If the
+frontend sees its version differs, it automatically refreshes itself with some
+probability. Set `ZET_FRONTEND_RELEASE_FILE` if deployed outside
+`web/BUILD/version.json`.
+
+Deploy hashed assets first, HTML next, and `version.json` last (or atomically).
+Retain old hashed assets for at least the HTML cache lifetime.
 
 ## Feedback delivery
 

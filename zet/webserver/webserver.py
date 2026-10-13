@@ -33,6 +33,7 @@ from zet.webserver.news import (
     NEWS_SCHEMA_V2,
     NewsCache,
 )
+from zet.webserver.frontend_release import release_message
 from zet.utils.email import send_feedback_email
 from zet.utils.pushover import RateLimitedNotifier
 
@@ -790,6 +791,7 @@ gtfs_server: GtfsServer | None = None
 def handle_websocket(
     ws: simple_websocket.ws.Server,
     version: int,
+    app_updates: bool = False,
 ):
     if gtfs_server is None:
         raise Exception("gtfs_server is not initialized")
@@ -799,7 +801,10 @@ def handle_websocket(
     logger.info("Client connected. Number of clients: %d",
                 len(gtfs_server.ws_clients))
     try:
+        frontend_release = release_message() if app_updates else None
         with gtfs_server._send_lock:
+            if frontend_release is not None:
+                client.ws.send(frontend_release)
             if gtfs_server.latest_message:
                 client.ws.send(gtfs_server.latest_message.for_version(version))
             if version >= 3:
@@ -843,7 +848,8 @@ def websocket_v3(ws: simple_websocket.ws.Server):
 @sock.route('/ws-v4')
 def websocket_v4(ws: simple_websocket.ws.Server):
     """v4 opts into news schema v2."""
-    handle_websocket(ws, version=4)
+    # Old cached clients do not understand app-version messages.
+    handle_websocket(ws, version=4, app_updates=request.args.get('appUpdates') == '1')
 
 
 @app.route('/news')

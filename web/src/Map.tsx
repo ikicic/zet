@@ -22,6 +22,8 @@ import {
 } from "./Filter";
 import { InfoControl, InfoOverlay } from "./Info";
 import "./Map.css";
+import mapStyleUrl from "../BUILD/style.json?url";
+import { createAppUpdater } from "./AppUpdates";
 import { MapUnavailable } from "./MapUnavailable";
 import {
   diagnoseMapFailure,
@@ -325,7 +327,7 @@ export function Map() {
     try {
       map = new maplibregl.Map({
         container: mapContainer.current,
-        style: "/style.json",
+        style: mapStyleUrl,
         canvasContextAttributes: {
           ...MAP_CONTEXT_ATTRIBUTES,
           // Prefer WebGL2; MapLibre falls back to WebGL1 when it is unavailable.
@@ -638,15 +640,14 @@ export function Map() {
   }, [activeStaticKey, loadedSmallStaticData]);
 
   // WebSocket connection and updates with reconnection logic.
-  // Start once the map is initialized, without waiting for its style to load.
+  // Version announcements must still work if the map cannot initialize.
   useEffect(() => {
-    if (!mapRef.current) {
-      return;
-    }
-
     let ws: WebSocket | null = null;
     let reconnectAttempts = 0;
     let isMounted = true; // Flag to track if component is still mounted
+    let appUpdater = __DEV__
+      ? null
+      : createAppUpdater((url) => window.location.replace(url.href));
 
     const connectWebSocket = () => {
       if (!isMounted) {
@@ -654,6 +655,7 @@ export function Map() {
       }
 
       const url = new URL(getUrl("ws", "wss", "ws-v4"));
+      if (appUpdater) url.searchParams.set("appUpdates", "1");
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => {
@@ -662,7 +664,13 @@ export function Map() {
       });
 
       ws.addEventListener("message", (event) => {
+        if (!isMounted) return;
         const data = JSON.parse(event.data);
+        if (data.type === "app-version") {
+          void appUpdater?.handleVersion(data);
+          return;
+        }
+        if (!mapRef.current) return;
         if (isNewsStatus(data)) {
           if (seenNewsVersionRef.current === null) {
             seenNewsVersionRef.current = data.version;
@@ -682,6 +690,8 @@ export function Map() {
       });
 
       ws.addEventListener("close", () => {
+        appUpdater?.dispose();
+        appUpdater = null; // Reconnecting must not refresh an ongoing visit.
         console.log("WebSocket connection closed");
         if (isMounted) {
           // Only reconnect if component is still mounted
@@ -715,6 +725,7 @@ export function Map() {
 
     return () => {
       isMounted = false; // Do not reconnect anymore.
+      appUpdater?.dispose();
       ws?.close();
     };
   }, []);

@@ -1,16 +1,23 @@
 const path = require("path");
 const webpack = require("webpack");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
+const ReleaseManifestPlugin = require("./scripts/ReleaseManifestPlugin.cjs");
 
-module.exports = (env, argv) => ({
+module.exports = (_env, argv) => ({
   mode: "development",
   entry: "./src/Index.tsx",
   output: {
     filename: "bundle.[contenthash].js",
     path: path.resolve(__dirname, "BUILD"),
+    publicPath: "/",
   },
   module: {
     rules: [
+      {
+        resourceQuery: /\burl\b/,
+        type: "asset/resource",
+        generator: { filename: "[name].[contenthash][ext]" },
+      },
       {
         test: /\.(ts|tsx)$/,
         exclude: /node_modules/,
@@ -37,6 +44,9 @@ module.exports = (env, argv) => ({
       filename: "privacy.html",
       inject: false,
     }),
+    ...((argv.mode || "development") === "production"
+      ? [new ReleaseManifestPlugin()]
+      : []),
   ],
   devServer: {
     host: "0.0.0.0",

@@ -18,6 +18,7 @@ clean:
 
 test: $(VENV_DIR)/bin/activate web/node_modules
 	$(VENV_DIR)/bin/python -m unittest discover -s tests -p 'test_*.py'
+	node web/scripts/test-release-build.cjs
 	npm --prefix web run test:graphics
 
 .PHONY: all clean test
