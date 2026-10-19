@@ -370,11 +370,15 @@ async function main() {
   const maplibreCss = fs.readFileSync(
     require.resolve("maplibre-gl/dist/maplibre-gl.css"),
   );
-  const mapCss = fs.readFileSync(path.join(__dirname, "../src/Map.css"));
+  const mapCss = ["Map.css", "Overlay.css"]
+    .map((file) =>
+      fs.readFileSync(path.join(__dirname, "../src", file), "utf8"),
+    )
+    .join("\n");
   const tooltipCss = fs.readFileSync(
     path.join(__dirname, "../src/VehicleDelayTooltip.css"),
   );
-  const html = `<!doctype html><link rel="stylesheet" href="/maplibre.css"><link rel="stylesheet" href="/map.css"><link rel="stylesheet" href="/vehicle-delay-tooltip.css"><pre id="result">running</pre><script src="/maplibre.js"></script><script>
+  const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/maplibre.css"><link rel="stylesheet" href="/map.css"><link rel="stylesheet" href="/vehicle-delay-tooltip.css"><pre id="result">running</pre><script src="/maplibre.js"></script><script>
     window.__DEV__ = false;
     window.diagnostics = {};
     (function(exports) { ${outputText} })(window.diagnostics);

@@ -284,7 +284,43 @@ module.exports = async function recoveryTests() {
         directionDegrees: present ? [null] : [],
       },
     });
+    const pageHeight = document.documentElement.scrollHeight;
+    await act(async () =>
+      container.querySelector('button[title="Filtar"]').click(),
+    );
+    check(
+      container
+        .querySelector(".overlay")
+        .textContent.includes("Podaci o linijama još nisu dostupni."),
+      "Filter without feed data did not show its unavailable message in a dialog",
+    );
+    check(
+      getComputedStyle(container.querySelector(".overlay")).position ===
+        "fixed" && document.documentElement.scrollHeight === pageHeight,
+      "Opening the filter without feed data added page overflow",
+    );
+    await act(async () =>
+      container.querySelector(".overlay-close-button").click(),
+    );
+    check(
+      !container.querySelector(".overlay"),
+      "Unavailable filter dialog could not close",
+    );
+    await act(async () =>
+      container.querySelector('button[title="Filtar"]').click(),
+    );
     await act(async () => socket.emit("message", feed(true)));
+    await waitFor(
+      () => container.querySelectorAll(".filter-checkbox").length === 2,
+      "filter routes arriving while the dialog is open",
+    );
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    check(
+      !container.querySelector(".overlay"),
+      "Loaded filter dialog could not close with Escape",
+    );
     await act(async () => callbacks.onVehicleClick(layer.vehicles[0]));
     await waitFor(() => layer.selectedShape?.id === "a", "selected shape");
     await act(async () => socket.emit("message", feed(false)));

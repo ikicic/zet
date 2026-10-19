@@ -144,15 +144,19 @@ export function FilterOverlay({
   selection,
   onSelectionChange,
 }: FilterOverlayProps) {
-  if (smallStaticData == null) {
-    return <div>(...)</div>;
-  }
-
-  const { trams, buses } = categorizeRoutes(smallStaticData.routeIds);
-
   const handleReset = useCallback(() => {
     onSelectionChange(new Set());
   }, [onSelectionChange]);
+
+  if (smallStaticData == null) {
+    return (
+      <Overlay onClose={onClose} verticalPosition="bottom">
+        <p>Podaci o linijama još nisu dostupni.</p>
+      </Overlay>
+    );
+  }
+
+  const { trams, buses } = categorizeRoutes(smallStaticData.routeIds);
 
   return (
     <Overlay onClose={onClose} verticalPosition="bottom">
