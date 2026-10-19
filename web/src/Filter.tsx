@@ -214,13 +214,13 @@ function FilterControlView({
   onShowFilter,
   onToggleFilter,
   selectionSize,
-  anyMarkerVisible,
+  filterHidesAllVehicles,
   checked,
 }: {
   onShowFilter: () => void;
   onToggleFilter: (enabled: boolean) => void;
   selectionSize: number;
-  anyMarkerVisible: boolean;
+  filterHidesAllVehicles: boolean;
   checked: boolean;
 }) {
   const visible = selectionSize > 0;
@@ -240,7 +240,7 @@ function FilterControlView({
       )}
       <div
         className={`maplibregl-ctrl-group${
-          (anyMarkerVisible ? "" : " no-markers") +
+          (filterHidesAllVehicles ? " no-markers" : "") +
           (selectionSize > 0 && checked ? " active" : "")
         }`}
       >
@@ -281,7 +281,7 @@ export class FilterControl {
     outerContainer.className = "maplibregl-ctrl filter-ctrl";
     this.reactRoot = createRoot(outerContainer);
 
-    this.renderView(this.initialState, /* anyMarkerVisible */ 1);
+    this.renderView(this.initialState, /* filterHidesAllVehicles */ false);
 
     return outerContainer;
   }
@@ -291,11 +291,11 @@ export class FilterControl {
     this.reactRoot = null;
   }
 
-  updateState(state: FilterState, anyMarkerVisible: boolean) {
-    this.renderView(state, anyMarkerVisible);
+  updateState(state: FilterState, filterHidesAllVehicles: boolean) {
+    this.renderView(state, filterHidesAllVehicles);
   }
 
-  private renderView(state: FilterState, anyMarkerVisible: boolean | number) {
+  private renderView(state: FilterState, filterHidesAllVehicles: boolean) {
     if (!this.reactRoot) {
       return;
     }
@@ -303,7 +303,7 @@ export class FilterControl {
       <FilterControlView
         checked={state.enabled}
         selectionSize={state.selection.size}
-        anyMarkerVisible={!!anyMarkerVisible}
+        filterHidesAllVehicles={filterHidesAllVehicles}
         onToggleFilter={(enabled: boolean) => {
           this.onToggleFilter(enabled);
         }}

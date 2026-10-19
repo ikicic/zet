@@ -126,7 +126,7 @@ export function Map() {
     enabled: false,
   });
   const filterStateRef = useRef<FilterState>(filterState);
-  const anyMarkerVisibleRef = useRef<boolean>(true);
+  const filterHidesAllVehiclesRef = useRef<boolean>(false);
 
   const vehicleLayerRef = useRef<VehicleLayer | null>(null);
   const vehicleDelayTooltipRef = useRef<VehicleDelayTooltip | null>(null);
@@ -298,14 +298,15 @@ export function Map() {
       );
     }
 
-    // Determine if any markers are visible for the filter control
-    const anyVisible = visibleVehicles.length > 0;
-    anyMarkerVisibleRef.current = anyVisible;
+    // Warn only when filtering hides available vehicles.
+    // An empty feed is normal.
+    filterHidesAllVehiclesRef.current =
+      realTimeData.current.vehicles.length > 0 && visibleVehicles.length === 0;
 
     if (filterControlRef.current != null) {
       filterControlRef.current.updateState(
         filterStateRef.current,
-        anyMarkerVisibleRef.current,
+        filterHidesAllVehiclesRef.current,
       );
     }
 
@@ -776,7 +777,7 @@ export function Map() {
     if (filterControlRef.current != null) {
       filterControlRef.current.updateState(
         filterState,
-        anyMarkerVisibleRef.current,
+        filterHidesAllVehiclesRef.current,
       );
     }
   }, [filterState]);

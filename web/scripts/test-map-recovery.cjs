@@ -289,6 +289,10 @@ module.exports = async function recoveryTests() {
     await waitFor(() => layer.selectedShape?.id === "a", "selected shape");
     await act(async () => socket.emit("message", feed(false)));
     check(layer.highlightedRouteId === 2, "Feed gap lost route highlight");
+    check(
+      !container.querySelector(".filter-ctrl .no-markers"),
+      "Empty feed incorrectly triggered the filter warning",
+    );
     await act(async () => socket.emit("message", feed(true, "second", 3, "b")));
     await waitFor(
       () => layer.selectedShape?.id === "b",
