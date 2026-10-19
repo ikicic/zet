@@ -371,7 +371,10 @@ async function main() {
     require.resolve("maplibre-gl/dist/maplibre-gl.css"),
   );
   const mapCss = fs.readFileSync(path.join(__dirname, "../src/Map.css"));
-  const html = `<!doctype html><link rel="stylesheet" href="/maplibre.css"><link rel="stylesheet" href="/map.css"><pre id="result">running</pre><script src="/maplibre.js"></script><script>
+  const tooltipCss = fs.readFileSync(
+    path.join(__dirname, "../src/VehicleDelayTooltip.css"),
+  );
+  const html = `<!doctype html><link rel="stylesheet" href="/maplibre.css"><link rel="stylesheet" href="/map.css"><link rel="stylesheet" href="/vehicle-delay-tooltip.css"><pre id="result">running</pre><script src="/maplibre.js"></script><script>
     window.__DEV__ = false;
     window.diagnostics = {};
     (function(exports) { ${outputText} })(window.diagnostics);
@@ -388,7 +391,7 @@ async function main() {
     window.selectionModules = {React: load('react'), ...load('react-dom/client'), ...load('./useAsyncData'), ...load('./fetchJson'), ...load('./Data')};
     window.runSelectionTests = ${selectionTests.toString()};
     window.runRetryTests = ${retryTests.toString()};
-    window.vehicleDetailsModules = {...load('./VehicleDetails'), ...load('./Data')};
+    window.vehicleDetailsModules = {...load('./VehicleDetails'), ...load('./Data'), ...load('./VehicleDelayTooltip'), ...load('./VehicleDelay'), ...load('./formatDuration')};
     window.runVehicleDetailsTests = ${vehicleDetailsTests.toString()};
     window.appUpdateModules = load('./AppUpdates');
     window.runAppUpdateTests = ${appUpdateTests.toString()};
@@ -422,6 +425,11 @@ async function main() {
     if (request.url === "/maplibre.css") {
       response.setHeader("Content-Type", "text/css");
       response.end(maplibreCss);
+      return;
+    }
+    if (request.url === "/vehicle-delay-tooltip.css") {
+      response.setHeader("Content-Type", "text/css");
+      response.end(tooltipCss);
       return;
     }
     if (request.url === "/map.css") {

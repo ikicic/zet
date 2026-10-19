@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import random
 import threading
 import time
 import zipfile
@@ -38,6 +39,8 @@ from zet.utils.email import send_feedback_email
 from zet.utils.pushover import RateLimitedNotifier
 
 MAX_TRAJECTORY_LENGTH = 30
+# Longer observation gaps cannot distinguish late delivery from a stopped vehicle.
+MAX_REPORT_OBSERVATION_GAP_SECONDS = 30
 STALE_THRESHOLD = 120  # seconds
 TRAJECTORY_OUTPUT_LENGTH = 6
 DIRECTION_THRESHOLD_METERS = 20
@@ -142,12 +145,16 @@ class Vehicle:
     route_id: int
     shape_id: ShapeId | None
     timestamp: int
-    lat: list[float]  # lat[0] is the newest position
-    lon: list[float]  # lon[0] is the newest position
+    lat: list[float]  # lat[-1] is the newest position
+    lon: list[float]  # lon[-1] is the newest position
     direction_radians: float | None = None
 
     # How many times did the feed not contain the vehicle.
     no_update_counter: int = 0
+    # Estimated delay relative to the feed timestamp. At startup or after a
+    # gap, conservatively use position age. During continuous observation,
+    # repeated timestamps retain the estimate because the vehicle may be stopped.
+    report_delay: int | None = None
     vehicle_id: str | None = None
     trip_id: TripId | None = None
     block_id: str | None = None
@@ -177,7 +184,15 @@ class Vehicle:
 
     def update(self,
                vehicle: ParsedVehicle,
-               static_data: Optional['StaticData']):
+               static_data: Optional['StaticData'],
+               feed_timestamp: int,
+               continuous_feed: bool):
+        if (not continuous_feed or self.no_update_counter != 1
+                or vehicle.timestamp != self.timestamp
+                or self.report_delay is None):
+            self.report_delay = (
+                feed_timestamp - vehicle.timestamp
+                if 0 < vehicle.timestamp <= feed_timestamp else None)
         self.lat.append(vehicle.lat)
         self.lon.append(vehicle.lon)
         if len(self.lat) > MAX_TRAJECTORY_LENGTH:
@@ -248,6 +263,7 @@ class Vehicle:
             'tripIds': [v.trip_id for v in vehicles],
             'blockIds': [v.block_id for v in vehicles],
             'timestamps': ref.compress_timestamps([v.timestamp for v in vehicles]),
+            'reportDelays': [v.report_delay for v in vehicles],
             'compressedLats': compressed_lats,
             'compressedLons': compressed_lons,
             'directionDegrees': degrees,
@@ -259,12 +275,24 @@ class RealtimeState:
     vehicles: dict[tuple[str | None, TripId], Vehicle]
     timestamp: int
     active_static_key: str | None
+    _last_feed_received_at: float | None = field(default=None, init=False, repr=False)
 
     def update(
         self,
         feed: ParsedFeed,
         active_static_snapshot: Optional['StaticDataSnapshot'],
     ):
+        if feed.timestamp < self.timestamp:
+            # Historical replay or a feed clock reset starts a new observation.
+            self.vehicles.clear()
+        received_at = time.monotonic()
+        continuous_feed = (
+            0 <= feed.timestamp - self.timestamp
+            <= MAX_REPORT_OBSERVATION_GAP_SECONDS
+            and self._last_feed_received_at is not None
+            and 0 <= received_at - self._last_feed_received_at
+            <= MAX_REPORT_OBSERVATION_GAP_SECONDS)
+        self._last_feed_received_at = received_at
         for vehicle in self.vehicles.values():
             vehicle.no_update_counter += 1
 
@@ -279,7 +307,7 @@ class RealtimeState:
             if v is None:
                 v = Vehicle.from_parsed_vehicle(vehicle, static_data)
                 self.vehicles[key] = v
-            v.update(vehicle, static_data)
+            v.update(vehicle, static_data, feed.timestamp, continuous_feed)
 
         # Remove vehicles not in last 30 feeds.
         self.vehicles = {
@@ -611,6 +639,12 @@ class GtfsServer:
             return None, None
         if feed is None:
             return None, None
+
+        if os.environ.get('ZET_DEV') == '1':
+            # Occasionally age a position to exercise gray markers and recovery.
+            for vehicle in feed.vehicles:
+                if random.random() < 0.1:
+                    vehicle.timestamp -= random.randint(60, 900)
 
         # Match the feed's date, including when replaying historical data.
         feed_date = datetime.datetime.fromtimestamp(

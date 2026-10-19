@@ -1,22 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import "./StaleDataIndicator.css";
+import { formatDuration } from "./formatDuration";
 
 const STALE_THRESHOLD_SECONDS = 30;
 const CRITICAL_THRESHOLD_SECONDS = 180;
 
 function formatElapsed(totalSeconds: number): string {
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days} d`);
-  if (hours > 0) parts.push(`${hours} h`);
-  if (minutes > 0) parts.push(`${minutes} min`);
-  if (seconds > 0) parts.push(`${seconds} s`);
-
-  return `Zadnji podaci: prije ${parts.join(" ")}`;
+  return `Zadnji podaci: prije ${formatDuration(totalSeconds)}`;
 }
 
 interface StaleDataIndicatorProps {

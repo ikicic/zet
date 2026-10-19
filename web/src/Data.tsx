@@ -52,7 +52,14 @@ export interface Vehicle {
   shapeId: ShapeId;
   lat: number[];
   lon: number[];
+  /** Unix timestamp (seconds) of the vehicle's last reported position. */
   timestamp: number;
+  /** Timestamp is missing/invalid, or more than 3 seconds ahead of feed time. */
+  hasInvalidTimestamp: boolean;
+  /** Estimated delivery delay relative to feed time, in seconds. At startup or
+   * after a gap, conservatively uses position age. Null for invalid timestamps
+   * or older servers. */
+  reportDelay: number | null;
   directionDegrees: number | null;
 }
 
@@ -68,7 +75,10 @@ export interface CompressedVehicles {
   blockIds: (string | null)[];
   routeIds: RouteId[];
   shapeIds: ShapeId[];
+  /** Seconds before the feed timestamp. */
   timestamps: number[];
+  /** Missing from older servers. */
+  reportDelays?: (number | null)[];
   compressedLats: number[][];
   compressedLons: number[][];
   directionDegrees: number[];
@@ -107,9 +117,15 @@ class StaticReferenceSystem {
 
 const STATIC_REFERENCE_SYSTEM = new StaticReferenceSystem(6, 45.815, 15.9819);
 
-function decompressVehicles(data: CompressedVehicles): Vehicle[] {
+const FUTURE_TIMESTAMP_TOLERANCE_SECONDS = 3;
+
+function decompressVehicles(
+  data: CompressedVehicles,
+  refTimestamp: number,
+): Vehicle[] {
   const vehicles: Vehicle[] = [];
   for (let i = 0, n = data.routeIds.length; i < n; ++i) {
+    const timestamp = refTimestamp - data.timestamps[i];
     vehicles.push({
       vehicleId: data.vehicleIds[i],
       tripId: data.tripIds[i],
@@ -118,7 +134,12 @@ function decompressVehicles(data: CompressedVehicles): Vehicle[] {
       shapeId: data.shapeIds[i],
       lat: STATIC_REFERENCE_SYSTEM.decompress_lats(data.compressedLats[i]),
       lon: STATIC_REFERENCE_SYSTEM.decompress_lons(data.compressedLons[i]),
-      timestamp: data.timestamps[i],
+      timestamp,
+      hasInvalidTimestamp:
+        !Number.isFinite(timestamp) ||
+        timestamp <= 0 ||
+        data.timestamps[i] < -FUTURE_TIMESTAMP_TOLERANCE_SECONDS,
+      reportDelay: data.reportDelays?.[i] ?? null,
       directionDegrees: data.directionDegrees[i],
     });
   }
@@ -129,7 +150,7 @@ export function decompressRealTimeState(
   data: CompressedRealTimeState,
 ): RealTimeState {
   return {
-    vehicles: decompressVehicles(data.vehicles),
+    vehicles: decompressVehicles(data.vehicles, data.timestamp),
     timestamp: data.timestamp,
     activeStaticKey: data.activeStaticKey,
   };

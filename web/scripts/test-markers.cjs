@@ -288,6 +288,69 @@ module.exports = async function markerTests() {
           check(layer.atlas.dpr < 2, "Oversized atlas was not reduced");
         }
       }
+      // Both marker types combine delivery delay and feed age.
+      for (const routeId of [6, 109]) {
+        const color = (reportDelay, highlighted = false) =>
+          layer.getVehicleColor(
+            { routeId, reportDelay, timestamp: 0 },
+            highlighted,
+          );
+        const fresh = color(0);
+        check(
+          JSON.stringify(color(null)) === JSON.stringify(fresh),
+          "Unknown report delay changed marker color",
+        );
+        check(
+          JSON.stringify(color(75)) === JSON.stringify(fresh),
+          "Healthy report faded before the threshold",
+        );
+        const stale = color(90);
+        check(
+          JSON.stringify(
+            layer.getVehicleColor(
+              { routeId, reportDelay: null, hasInvalidTimestamp: true },
+              false,
+            ),
+          ) === JSON.stringify(stale),
+          "Invalid timestamp did not gray marker",
+        );
+        check(
+          Math.max(...stale.slice(0, 3)) - Math.min(...stale.slice(0, 3)) < 0.1,
+          "Delayed marker is not gray",
+        );
+        check(
+          JSON.stringify(color(1800)) === JSON.stringify(stale),
+          "Long delays exceed the gray color range",
+        );
+        layer.setFeedAge(60);
+        check(
+          JSON.stringify(color(30)) === JSON.stringify(stale),
+          "Vehicle and feed delays were not added",
+        );
+        layer.setFeedAge(300);
+        check(
+          JSON.stringify(color(null)) === JSON.stringify(stale),
+          "Old feed did not gray a marker with unknown report delay",
+        );
+        layer.setFeedAge(0);
+        check(
+          JSON.stringify(color(0)) === JSON.stringify(fresh),
+          "Feed recovery did not restore normal color",
+        );
+        const partial = color(82.5);
+        check(
+          partial.every(
+            (v, i) =>
+              v >= Math.min(fresh[i], stale[i]) &&
+              v <= Math.max(fresh[i], stale[i]),
+          ),
+          "Fade is outside its color bounds",
+        );
+        check(
+          JSON.stringify(color(1800, true)) === JSON.stringify(color(0, true)),
+          "Selected route lost its highlight",
+        );
+      }
       const vehicles = [
         {
           routeId: 6,
@@ -320,6 +383,17 @@ module.exports = async function markerTests() {
       const pixels = render();
       handlers.get("click")({ point: { x: 25, y: 25 } });
       check(clicked === 6, "Highlighted vehicle not selectable");
+      layer.setFeedAge(300);
+      const oldFeedPixels = render();
+      check(
+        oldFeedPixels.some((value, i) => value !== pixels[i]),
+        "Feed aging did not invalidate cached marker instances",
+      );
+      layer.setFeedAge(0);
+      check(
+        render().every((value, i) => value === pixels[i]),
+        "Feed recovery did not rebuild cached marker colors",
+      );
       const alphaAt = (x, y) => pixels[((160 - 1 - y) * 160 + x) * 4 + 3];
       check(
         alphaAt(50, 50) > 0 && alphaAt(120, 120) > 0,

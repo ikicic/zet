@@ -9,6 +9,11 @@ import {
 import { WebGLMarkerRenderer } from "./WebGLMarkerRenderer";
 import { TrajectoryLayer } from "./TrajectoryLayer";
 import { getMapDpr } from "./url";
+import {
+  getEffectiveVehicleDelay,
+  STALE_FADE_START_SECONDS,
+  STALE_FADE_END_SECONDS,
+} from "./VehicleDelay";
 
 export interface VehicleLayerOptions {
   onVehicleClick: (vehicle: Vehicle) => void;
@@ -65,6 +70,25 @@ const TRAM_COLOR = hslToRgb(207, 0.9, 0.54);
 const HIGHLIGHTED_TRAM_COLOR = hslToRgb(7, 0.898, 0.539);
 const BUS_COLOR = hslToRgb(212, 0.8, 0.42);
 const HIGHLIGHTED_BUS_COLOR = hslToRgb(12, 0.804, 0.42);
+const STALE_TRAM_COLOR = hslToRgb(210, 0.06, 0.56);
+const STALE_BUS_COLOR = hslToRgb(210, 0.06, 0.3);
+
+function isTram(vehicle: Vehicle): boolean {
+  return vehicle.routeId.toString().length < 3;
+}
+
+/** 0 for fresh vehicles, 1 for stale ones, smooth in between. */
+function getStaleness(reportDelaySeconds: number): number {
+  const t = Math.min(
+    1,
+    Math.max(
+      0,
+      (reportDelaySeconds - STALE_FADE_START_SECONDS) /
+        (STALE_FADE_END_SECONDS - STALE_FADE_START_SECONDS),
+    ),
+  );
+  return t * t * (3 - 2 * t);
+}
 
 export class VehicleLayer {
   private _atlas: MarkerAtlas | null = null;
@@ -76,6 +100,7 @@ export class VehicleLayer {
   private measureInitialAtlasBuild: boolean;
 
   private vehicles: Vehicle[] = [];
+  private feedAge = 0;
   private filterSelection: Set<RouteId> = new Set();
   private highlightedRouteId: RouteId | null = null;
   private selectedShape: Shape | null = null;
@@ -153,6 +178,15 @@ export class VehicleLayer {
     this.map.triggerRepaint();
   }
 
+  setFeedAge(seconds: number) {
+    // Once the feed alone makes every unselected marker gray, colors stop changing.
+    const age = Math.min(STALE_FADE_END_SECONDS, Math.max(0, seconds));
+    if (age === this.feedAge) return;
+    this.feedAge = age;
+    this.lastState = null;
+    this.map.triggerRepaint();
+  }
+
   openAtlasDebugOverlay() {
     if (this._atlas) {
       openAtlasDebugOverlay(this._atlas);
@@ -207,12 +241,12 @@ export class VehicleLayer {
     vehicle: Vehicle,
     isHighlighted: boolean,
   ): [number, number, number] {
-    const isTram = vehicle.routeId.toString().length < 3;
+    const tram = isTram(vehicle);
     return isHighlighted
-      ? isTram
+      ? tram
         ? HIGHLIGHTED_TRAM_COLOR
         : HIGHLIGHTED_BUS_COLOR
-      : isTram
+      : tram
         ? TRAM_COLOR
         : BUS_COLOR;
   }
@@ -222,7 +256,20 @@ export class VehicleLayer {
     isHighlighted: boolean,
   ): [number, number, number, number] {
     const base = this.getBaseColor(vehicle, isHighlighted);
-    return [base[0], base[1], base[2], 1.0];
+    // Keep the selected route red so it stands out, even when stale.
+    if (isHighlighted) {
+      return [base[0], base[1], base[2], 1.0];
+    }
+    const stale = isTram(vehicle) ? STALE_TRAM_COLOR : STALE_BUS_COLOR;
+    const s = vehicle.hasInvalidTimestamp
+      ? 1
+      : getStaleness(getEffectiveVehicleDelay(vehicle, this.feedAge));
+    return [
+      base[0] + (stale[0] - base[0]) * s,
+      base[1] + (stale[1] - base[1]) * s,
+      base[2] + (stale[2] - base[2]) * s,
+      1.0,
+    ];
   }
 
   /** Rebuild marker instances using the map transform for this frame. */

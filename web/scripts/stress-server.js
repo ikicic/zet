@@ -41,6 +41,7 @@ function makeState(count) {
       routeIds,
       shapeIds,
       timestamps,
+      reportDelays: timestamps.map(() => 0),
       compressedLats,
       compressedLons,
       directionDegrees,

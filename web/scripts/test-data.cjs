@@ -23,19 +23,21 @@ const decoded = api.decompressBigStaticData({
   },
   stops: { latDeltas: deltas, lonDeltas: deltas },
 });
+const vehiclesPayload = {
+  vehicleIds: ["102202"],
+  tripIds: ["trip"],
+  blockIds: ["206"],
+  routeIds: [6],
+  shapeIds: ["route"],
+  timestamps: [15],
+  reportDelays: [550],
+  compressedLats: [deltas],
+  compressedLons: [deltas],
+  directionDegrees: [0],
+};
 const realtime = api.decompressRealTimeState({
-  vehicles: {
-    vehicleIds: ["102202"],
-    tripIds: ["trip"],
-    blockIds: ["206"],
-    routeIds: [6],
-    shapeIds: ["route"],
-    timestamps: [0],
-    compressedLats: [deltas],
-    compressedLons: [deltas],
-    directionDegrees: [0],
-  },
-  timestamp: 1,
+  vehicles: vehiclesPayload,
+  timestamp: 1000,
   activeStaticKey: "test",
 });
 function near(actual, expected) {
@@ -46,6 +48,32 @@ near(decoded.shapes.route.lats, lats);
 near(decoded.shapes.route.lons, lons);
 near(realtime.vehicles[0].lat, lats);
 near(realtime.vehicles[0].lon, lons);
+assert.equal(realtime.vehicles[0].timestamp, 985);
+assert.equal(realtime.vehicles[0].reportDelay, 550);
+const withoutDelays = api.decompressRealTimeState({
+  vehicles: { ...vehiclesPayload, reportDelays: undefined },
+  timestamp: 1000,
+  activeStaticKey: "test",
+});
+assert.equal(withoutDelays.vehicles[0].reportDelay, null);
+for (const [age, invalid] of [
+  [-3, false],
+  [-4, true],
+  [-86400, true],
+  [1000, true],
+  [15, false],
+]) {
+  const decodedVehicle = api.decompressRealTimeState({
+    vehicles: { ...vehiclesPayload, timestamps: [age], reportDelays: [null] },
+    timestamp: 1000,
+    activeStaticKey: "test",
+  }).vehicles[0];
+  assert.equal(
+    decodedVehicle.hasInvalidTimestamp,
+    invalid,
+    `Wrong validity for compressed timestamp ${age}`,
+  );
+}
 near(decoded.shapes.route.stops.lats, [lats[2], lats[1], lats[0], lats[3]]);
 near(decoded.shapes.route.stops.lons, [lons[2], lons[1], lons[0], lons[3]]);
 assert.deepEqual(decoded.shapes.empty.stops, { lats: [], lons: [] });

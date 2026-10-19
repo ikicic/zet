@@ -32,6 +32,8 @@ import {
 } from "./GraphicsDiagnostics";
 import { VehicleLayer } from "./VehicleLayer";
 import { findSelectedVehicle } from "./VehicleDetails";
+import { VehicleDelayTooltip } from "./VehicleDelayTooltip";
+import { getFeedAge } from "./VehicleDelay";
 import { StaleDataIndicator } from "./StaleDataIndicator";
 import { getMapCanvasDpr, getUrl, getHttpUrl } from "./url";
 import { PerfOverlay } from "./PerfOverlay";
@@ -127,6 +129,7 @@ export function Map() {
   const anyMarkerVisibleRef = useRef<boolean>(true);
 
   const vehicleLayerRef = useRef<VehicleLayer | null>(null);
+  const vehicleDelayTooltipRef = useRef<VehicleDelayTooltip | null>(null);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [activeStaticKey, setActiveStaticKey] = useState<string | null>(null);
   const [loadedSmallStaticData, setLoadedSmallStaticData] =
@@ -226,6 +229,22 @@ export function Map() {
     removeLegacyNewsStorage();
   }, []);
 
+  const updateVehicleDelays = () => {
+    const state = realTimeData.current;
+    if (!state) return;
+    const feedAge = getFeedAge(state.timestamp);
+    vehicleLayerRef.current?.setFeedAge(feedAge);
+    vehicleDelayTooltipRef.current?.setVehicle(
+      findSelectedVehicle(state.vehicles, selectedVehicleRef.current),
+      feedAge,
+    );
+  };
+
+  useEffect(() => {
+    const timer = setInterval(updateVehicleDelays, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const redraw = () => {
     if (
       mapRef.current == null ||
@@ -246,6 +265,7 @@ export function Map() {
     );
     // Keep the last identity through feed gaps; only the current match is shown.
     if (selectedVehicle) selectedVehicleRef.current = selectedVehicle;
+    updateVehicleDelays();
     if (
       previousVehicle &&
       selectedVehicle &&
@@ -540,6 +560,7 @@ export function Map() {
           },
         });
 
+        vehicleDelayTooltipRef.current = new VehicleDelayTooltip(map);
         const vehicleLayer = new VehicleLayer(map, {
           onVehicleClick: (vehicle) => {
             selectedVehicleRef.current = vehicle;
@@ -603,6 +624,8 @@ export function Map() {
         vehicleLayerRef.current.destroy();
         vehicleLayerRef.current = null;
       }
+      vehicleDelayTooltipRef.current?.setVehicle(null);
+      vehicleDelayTooltipRef.current = null;
       if (PERFORMANCE_MODE) {
         map.off("resize", updateMapCanvasDpr);
       }

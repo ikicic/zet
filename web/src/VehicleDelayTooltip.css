@@ -1,0 +1,19 @@
+.vehicle-delay-tooltip {
+  /* Let taps reach the map, e.g. to select a vehicle underneath. */
+  pointer-events: none;
+}
+
+.vehicle-delay-tooltip .maplibregl-popup-content {
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.vehicle-delay-tooltip.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: rgba(0, 0, 0, 0.75);
+}

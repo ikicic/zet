@@ -288,10 +288,7 @@ module.exports = async function recoveryTests() {
     await act(async () => callbacks.onVehicleClick(layer.vehicles[0]));
     await waitFor(() => layer.selectedShape?.id === "a", "selected shape");
     await act(async () => socket.emit("message", feed(false)));
-    check(
-      layer.highlightedRouteId === 2,
-      "Feed gap lost route highlight",
-    );
+    check(layer.highlightedRouteId === 2, "Feed gap lost route highlight");
     await act(async () => socket.emit("message", feed(true, "second", 3, "b")));
     await waitFor(
       () => layer.selectedShape?.id === "b",
@@ -307,6 +304,44 @@ module.exports = async function recoveryTests() {
     check(
       layer.highlightedRouteId === null,
       "Explicit deselection was forgotten",
+    );
+    // The map must age without receiving another WebSocket message.
+    const now = Date.now;
+    const outageStart = now();
+    try {
+      Date.now = () => outageStart;
+      const healthyFeed = feed(true);
+      healthyFeed.vehicles.reportDelays = [8];
+      await act(async () => socket.emit("message", healthyFeed));
+      await act(async () => callbacks.onVehicleClick(layer.vehicles[0]));
+      check(layer.feedAge === 0, "Healthy feed already aged");
+      Date.now = () => outageStart + 120000;
+      await act(
+        async () => new Promise((resolve) => setTimeout(resolve, 5100)),
+      );
+      check(
+        layer.feedAge === 90,
+        "No-message outage did not age marker colors through the timer",
+      );
+      check(
+        container
+          .querySelector(".vehicle-delay-tooltip")
+          .textContent.includes("2 min 8 s"),
+        "Tooltip did not age alongside marker colors without messages",
+      );
+      const recoveredFeed = feed(true);
+      recoveredFeed.vehicles.reportDelays = [8];
+      await act(async () => socket.emit("message", recoveredFeed));
+      check(
+        layer.feedAge === 0 &&
+          !container.querySelector(".vehicle-delay-tooltip"),
+        "Fresh feed did not recover marker colors and tooltip",
+      );
+    } finally {
+      Date.now = now;
+    }
+    passed.push(
+      "Vehicle colors and delay tooltip age without messages and recover with a fresh feed",
     );
     // Ordinary MapLibre errors must not replace a working map with diagnostics.
     await act(async () =>

@@ -6,7 +6,7 @@ export function findSelectedVehicle(
 ): Vehicle | null {
   if (!selected) return null;
   // Prefer the physical vehicle so selection survives a change of trip.
-  // Timestamps in the compressed feed are ages: smaller means more recent.
+  // If several vehicles match, take the most recently reported one.
   let match: Vehicle | null = null;
   for (const vehicle of vehicles) {
     const matches = selected.vehicleId
@@ -14,7 +14,7 @@ export function findSelectedVehicle(
       : selected.tripId
         ? vehicle.tripId === selected.tripId
         : vehicle === selected;
-    if (matches && (match === null || vehicle.timestamp < match.timestamp)) {
+    if (matches && (match === null || vehicle.timestamp > match.timestamp)) {
       match = vehicle;
     }
   }
