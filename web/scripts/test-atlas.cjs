@@ -70,6 +70,46 @@ module.exports = function atlasTests() {
       );
       remember(entry);
     }
+    atlas.consumeDirtyRect();
+    const selectedColor = [0.95, 0.22, 0.13, 1];
+    const outline = atlas.getSelectedShape(1, null, selectedColor);
+    for (const length of [1, 2, 3]) {
+      for (const angle of [
+        null,
+        ...Array.from({ length: 30 }, (_, i) => i * 12),
+      ]) {
+        check(
+          atlas.getSelectedShape(length, angle, selectedColor) === outline,
+          "Selection changes allocated another outline sprite",
+        );
+        atlas.consumeDirtyRect();
+        atlas.getSelectedShape(length, angle, selectedColor);
+        check(
+          atlas.consumeDirtyRect() === null,
+          "Unchanged selection dirtied the atlas",
+        );
+      }
+    }
+    // Reusing the slot must erase the old contour, not accumulate outlines.
+    atlas.getSelectedShape(1, null, selectedColor);
+    const initialOutline = atlas.readPixels(
+      outline.x,
+      outline.y,
+      outline.w,
+      outline.h,
+    ).data;
+    atlas.getSelectedShape(3, 84, selectedColor);
+    atlas.getSelectedShape(1, null, selectedColor);
+    const restoredOutline = atlas.readPixels(
+      outline.x,
+      outline.y,
+      outline.w,
+      outline.h,
+    ).data;
+    check(
+      initialOutline.every((v, i) => v === restoredOutline[i]),
+      "Selection outline retained pixels from a previous shape",
+    );
     for (const { entry, pixels } of sprites.values()) {
       const current = atlas.readPixels(entry.x, entry.y, entry.w, entry.h).data;
       check(
@@ -83,8 +123,9 @@ module.exports = function atlasTests() {
     );
     if (dpr === 3.25)
       check(
-        width * height * 4 < 5 * 1024 * 1024,
-        "Atlas exceeded its 5 MiB regression budget",
+        // Allow the one reusable outline slot in addition to the shared shapes.
+        width * height * 4 < 5.25 * 1024 * 1024,
+        "Atlas exceeded its 5.25 MiB regression budget",
       );
     passed.push(
       `DPR ${dpr}: all ${window.atlasRouteLabels.length} synthetic labels and directions fit without growth or overwriting sprites; one reusable scratch canvas`,

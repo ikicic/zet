@@ -323,7 +323,15 @@ module.exports = async function recoveryTests() {
     );
     await act(async () => callbacks.onVehicleClick(layer.vehicles[0]));
     await waitFor(() => layer.selectedShape?.id === "a", "selected shape");
+    check(
+      layer.selectedVehicle === layer.vehicles[0],
+      "Clicked vehicle was not passed to the renderer",
+    );
     await act(async () => socket.emit("message", feed(false)));
+    check(
+      layer.selectedVehicle === null,
+      "Feed gap retained a stale selected marker",
+    );
     check(layer.highlightedRouteId === 2, "Feed gap lost route highlight");
     check(
       !container.querySelector(".filter-ctrl .no-markers"),
@@ -335,14 +343,15 @@ module.exports = async function recoveryTests() {
       "returned vehicle shape",
     );
     check(
-      layer.highlightedRouteId === 3,
+      layer.highlightedRouteId === 3 &&
+        layer.selectedVehicle === layer.vehicles[0],
       "Selection did not recover across gap and route/trip change",
     );
     await act(async () => socket.emit("message", feed(false)));
     await act(async () => callbacks.onNothingClick());
     await act(async () => socket.emit("message", feed(true)));
     check(
-      layer.highlightedRouteId === null,
+      layer.highlightedRouteId === null && layer.selectedVehicle === null,
       "Explicit deselection was forgotten",
     );
     // The map must age without receiving another WebSocket message.

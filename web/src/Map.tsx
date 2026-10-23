@@ -295,6 +295,7 @@ export function Map() {
         activeSelection,
         highlightedRouteId,
         selectedShapeRef.current,
+        selectedVehicle,
       );
     }
 

@@ -265,6 +265,42 @@ function computeShapeSizes(labelLength: number, dpr: number) {
   };
 }
 
+function traceShape(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  sizes: ReturnType<typeof computeShapeSizes>,
+  directionDeg: number | null,
+) {
+  const { ehw, ehh, ARROW_EXTENSION } = sizes;
+  ctx.beginPath();
+
+  if (directionDeg != null) {
+    const phi = (directionDeg - 90) * (Math.PI / 180);
+    const deltaPhi = (50 * Math.PI) / 180;
+    const NUM_SAMPLES = 90;
+
+    for (let i = 0; i <= NUM_SAMPLES; i++) {
+      const theta = phi + (i / NUM_SAMPLES) * 2 * Math.PI;
+      const r = calculateSimplifiedTeardropRadiusAtAngle(
+        theta,
+        ehw,
+        ehh,
+        phi,
+        deltaPhi,
+        ARROW_EXTENSION,
+      );
+      const px = cx + r * Math.cos(theta);
+      const py = cy + r * Math.sin(theta);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  } else {
+    ctx.ellipse(cx, cy, ehw, ehh, 0, 0, Math.PI * 2);
+  }
+}
+
 function computeShapeAnalyticalBounds(
   sizes: ReturnType<typeof computeShapeSizes>,
   fullW: number,
@@ -360,7 +396,10 @@ export function computeAtlasDimensions(dpr: number): {
     EXPECTED_LABEL_COUNT *
     (labelSlot.tightW + PACK_PAD) *
     (labelSlot.tightH + PACK_PAD);
-  const totalArea = (shapeArea + labelArea) * 1.15;
+  const outlineSize = computeShapeSizes(Math.max(...LABEL_LENGTHS), dpr);
+  const outlineArea =
+    (outlineSize.dirW + PACK_PAD) * (outlineSize.dirH + PACK_PAD);
+  const totalArea = (shapeArea + labelArea + outlineArea) * 1.15;
   const height = Math.ceil(totalArea / width);
 
   return { width, height, shapeArea, labelArea, totalArea };
@@ -424,6 +463,8 @@ export class MarkerAtlas {
 
   private shapes = new Map<string, AtlasEntry>();
   private labels = new Map<string, AtlasEntry>();
+  private selectedShape: AtlasEntry;
+  private selectedShapeKey: string | null = null;
 
   // Pre-allocated label slots (positions computed at construction time).
   private labelSlot: LabelSlotSize;
@@ -449,6 +490,22 @@ export class MarkerAtlas {
 
     // Pre-measure label slot size from "999" + leeway.
     this.labelSlot = computeLabelSlotSize(dpr);
+
+    // One mutable sprite serves every selection; never cache outline variants.
+    const outlineSize = computeShapeSizes(Math.max(...LABEL_LENGTHS), dpr);
+    const w = outlineSize.dirW;
+    const h = outlineSize.dirH;
+    const [x, y] = this.allocate(w, h);
+    this.selectedShape = {
+      x,
+      y,
+      w,
+      h,
+      cx: w / 2,
+      cy: h / 2,
+      flipX: false,
+      flipY: false,
+    };
 
     this.renderAllShapes();
 
@@ -826,7 +883,7 @@ export class MarkerAtlas {
     sizes: ReturnType<typeof computeShapeSizes>,
     directionDeg: number | null,
   ) {
-    const { ehw, ehh, SHADOW_BLUR, ARROW_EXTENSION } = sizes;
+    const { SHADOW_BLUR } = sizes;
     const dpr = this.dpr;
 
     // IMPORTANT: Render shapes in WHITE fill with BLACK border.
@@ -845,32 +902,7 @@ export class MarkerAtlas {
     ctx.fillStyle = fillColor;
     ctx.strokeStyle = strokeColor;
     ctx.lineWidth = 0.5 * dpr;
-    ctx.beginPath();
-
-    if (directionDeg != null) {
-      const phi = (directionDeg - 90) * (Math.PI / 180);
-      const deltaPhi = (50 * Math.PI) / 180;
-      const NUM_SAMPLES = 90;
-
-      for (let i = 0; i <= NUM_SAMPLES; i++) {
-        const theta = phi + (i / NUM_SAMPLES) * 2 * Math.PI;
-        const r = calculateSimplifiedTeardropRadiusAtAngle(
-          theta,
-          ehw,
-          ehh,
-          phi,
-          deltaPhi,
-          ARROW_EXTENSION,
-        );
-        const px = cx + r * Math.cos(theta);
-        const py = cy + r * Math.sin(theta);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-    } else {
-      ctx.ellipse(cx, cy, ehw, ehh, 0, 0, Math.PI * 2);
-    }
+    traceShape(ctx, cx, cy, sizes, directionDeg);
 
     ctx.fill();
     ctx.stroke();
@@ -899,6 +931,58 @@ export class MarkerAtlas {
       throw new Error(`Shape not found: ${key}`);
     }
     return entry;
+  }
+
+  /** Only one selected vehicle can use this mutable sprite in a frame. */
+  getSelectedShape(
+    labelLength: number,
+    directionDeg: number | null,
+    color: readonly number[],
+  ): AtlasEntry {
+    const roundedDeg =
+      directionDeg === null
+        ? null
+        : (((Math.round(directionDeg / DIRECTION_STEP) * DIRECTION_STEP) %
+            360) +
+            360) %
+          360;
+    const fill = `rgb(${color
+      .slice(0, 3)
+      .map((v) => Math.round(v * 255))
+      .join(",")})`;
+    const key = `${MarkerAtlas.shapeKey(labelLength, roundedDeg)}:${fill}`;
+    if (key === this.selectedShapeKey) return this.selectedShape;
+    const { x, y, w, h, cx, cy } = this.selectedShape;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.clearRect(x, y, w, h);
+    traceShape(
+      ctx,
+      x + cx,
+      y + cy,
+      computeShapeSizes(labelLength, this.dpr),
+      roundedDeg,
+    );
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.lineWidth = 5.7 * this.dpr;
+    ctx.stroke();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 4.2 * this.dpr;
+    ctx.stroke();
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 1 * this.dpr;
+    ctx.stroke();
+    // Cover the inner half of the black stroke, leaving a 0.5 CSS px edge.
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.restore();
+    this.markDirty(x, y, w, h);
+    this.selectedShapeKey = key;
+    return this.selectedShape;
   }
 
   /** Get or create the atlas entry for a route label. */

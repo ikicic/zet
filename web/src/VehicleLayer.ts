@@ -40,6 +40,7 @@ interface LastState {
   vehicles: Vehicle[];
   filterSelection: Set<RouteId>;
   highlightedRouteId: RouteId | null;
+  selectedVehicle: Vehicle | null;
   selectedShape: Shape | null;
 }
 
@@ -103,6 +104,7 @@ export class VehicleLayer {
   private feedAge = 0;
   private filterSelection: Set<RouteId> = new Set();
   private highlightedRouteId: RouteId | null = null;
+  private selectedVehicle: Vehicle | null = null;
   private selectedShape: Shape | null = null;
   private debugLabels: string[] = [];
 
@@ -163,11 +165,13 @@ export class VehicleLayer {
     filterSelection: Set<RouteId>,
     highlightedRouteId: RouteId | null,
     selectedShape: Shape | null,
+    selectedVehicle: Vehicle | null = null,
   ) {
     this.vehicles = vehicles;
     this.filterSelection = filterSelection;
     this.highlightedRouteId = highlightedRouteId;
     this.selectedShape = selectedShape;
+    this.selectedVehicle = selectedVehicle;
 
     this.trajectoryLayer.setData(
       vehicles,
@@ -256,7 +260,7 @@ export class VehicleLayer {
     isHighlighted: boolean,
   ): [number, number, number, number] {
     const base = this.getBaseColor(vehicle, isHighlighted);
-    // Keep the selected route red so it stands out, even when stale.
+    // Keep highlighted markers vivid so they stand out, even when stale.
     if (isHighlighted) {
       return [base[0], base[1], base[2], 1.0];
     }
@@ -296,6 +300,7 @@ export class VehicleLayer {
       this.lastState.vehicles === this.vehicles &&
       this.lastState.filterSelection === this.filterSelection &&
       this.lastState.highlightedRouteId === this.highlightedRouteId &&
+      this.lastState.selectedVehicle === this.selectedVehicle &&
       this.lastState.selectedShape === this.selectedShape
     ) {
       return;
@@ -312,6 +317,7 @@ export class VehicleLayer {
       vehicles: this.vehicles,
       filterSelection: this.filterSelection,
       highlightedRouteId: this.highlightedRouteId,
+      selectedVehicle: this.selectedVehicle,
       selectedShape: this.selectedShape,
     };
 
@@ -321,8 +327,9 @@ export class VehicleLayer {
 
     for (const vehicle of this.vehicles) {
       const isHighlighted =
-        this.highlightedRouteId !== null &&
-        vehicle.routeId === this.highlightedRouteId;
+        vehicle === this.selectedVehicle ||
+        (this.highlightedRouteId !== null &&
+          vehicle.routeId === this.highlightedRouteId);
       const hidden =
         this.filterSelection.size > 0 &&
         !this.filterSelection.has(vehicle.routeId);
@@ -361,15 +368,28 @@ export class VehicleLayer {
       const labelLength = label.length;
       const deg = vehicle.directionDegrees ?? null;
 
-      const shapeEntry = this.atlas.getShape(labelLength, deg);
       const labelEntry = this.atlas.getOrCreateLabel(label);
 
       const sx = pixel.x * dpr;
       const sy = pixel.y * dpr;
       const vehicleColor = this.getVehicleColor(vehicle, isHighlighted);
 
-      // The icon is tinted, then the white route label is composited on top.
-      this.markerLayer.addInstance(sx, sy, shapeEntry, vehicleColor);
+      if (vehicle === this.selectedVehicle) {
+        this.markerLayer.addInstance(
+          sx,
+          sy,
+          this.atlas.getSelectedShape(labelLength, deg, vehicleColor),
+          [1, 1, 1, 1],
+        );
+      } else {
+        this.markerLayer.addInstance(
+          sx,
+          sy,
+          this.atlas.getShape(labelLength, deg),
+          vehicleColor,
+        );
+      }
+      // Composite the white route label above the marker and its outline.
       this.markerLayer.addInstance(sx, sy, labelEntry, [1, 1, 1, 1]);
 
       const { rx, ry } = getShapeHitDimensions(labelLength);

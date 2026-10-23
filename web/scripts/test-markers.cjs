@@ -621,6 +621,52 @@ module.exports = async function markerTests() {
           pixelAt(cleared, 60, 100)[0] === 16,
         `${type}: deselected route or stops remain visible`,
       );
+
+      const selected = vehicle(7, [[110, 100]]);
+      const sameRoute = vehicle(7, [[45, 55]]);
+      const selectionFleet = [selected, sameRoute, fleet[0]];
+      const selectionFilter = new Set([6]);
+      vehicles.setData(selectionFleet, selectionFilter, 7, shape, selected);
+      await new Promise((resolve) => map.once("render", resolve));
+      const selectionPixels = capture(context);
+      const selectedPixel = pixelAt(selectionPixels, 110, 106);
+      check(
+        red(selectedPixel),
+        `${type}: clicked vehicle lost its original red fill`,
+      );
+      const routePixel = pixelAt(selectionPixels, 45, 61);
+      check(
+        red(routePixel),
+        `${type}: other vehicles on the selected route lost their original red highlight`,
+      );
+      vehicles.setData(selectionFleet, selectionFilter, 7, shape, null);
+      await new Promise((resolve) => map.once("render", resolve));
+      const clearedSelectionPixels = capture(context);
+      const unselectedPixel = pixelAt(clearedSelectionPixels, 110, 106);
+      check(
+        red(unselectedPixel),
+        `${type}: clearing the clicked vehicle changed its route highlight`,
+      );
+      let outlinePixels = 0;
+      for (let y = 80; y < 120; y++) {
+        for (let x = 90; x < 130; x++) {
+          const outlined = pixelAt(selectionPixels, x, y);
+          const plain = pixelAt(clearedSelectionPixels, x, y);
+          if (
+            outlined[0] > plain[0] + 40 &&
+            outlined[1] > plain[1] + 40 &&
+            outlined[2] > plain[2] + 40
+          )
+            outlinePixels++;
+        }
+      }
+      check(
+        outlinePixels > 20,
+        `${type}: selected marker has no visible white outline`,
+      );
+      passed.push(
+        `${type}: clicked vehicle has a white outline that clears on deselection`,
+      );
       passed.push(
         `MapLibre ${type}: trails, routes, stops, filtering and drawing order`,
       );
