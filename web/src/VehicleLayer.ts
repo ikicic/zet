@@ -361,7 +361,7 @@ export class VehicleLayer {
       const labelLength = label.length;
       const deg = vehicle.directionDegrees ?? null;
 
-      const shapeEntry = this.atlas.getShape(labelLength, deg, isHighlighted);
+      const shapeEntry = this.atlas.getShape(labelLength, deg);
       const labelEntry = this.atlas.getOrCreateLabel(label);
 
       const sx = pixel.x * dpr;
@@ -394,7 +394,7 @@ export class VehicleLayer {
       const label = this.debugLabels[i];
       const x = width / dpr / 2 + (i % 3) * 64 - 64;
       const y = height / dpr / 2 + Math.floor(i / 3) * 52 - 26;
-      const shapeEntry = this.atlas.getShape(3, null, false);
+      const shapeEntry = this.atlas.getShape(3, null);
       const labelEntry = this.atlas.getOrCreateLabel(label);
       this.markerLayer.addInstance(x * dpr, y * dpr, shapeEntry, [
         ...BUS_COLOR,

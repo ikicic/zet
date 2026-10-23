@@ -1,7 +1,7 @@
 // Texture atlas for vehicle marker shapes and route labels.
-// Shapes are pre-rendered immediately (all combinations of label length,
-// direction, and highlight state are known upfront). Labels are added dynamically
-// as new routes appear.
+// Shapes are pre-rendered immediately (all combinations of label length and
+// direction are known upfront). Highlighting uses shader tint, sharing the
+// same shapes. Labels are added dynamically as new routes appear.
 //
 // Sprites are tightly cropped (transparent padding removed) and packed
 // left-to-right in rows (strip packing).
@@ -133,8 +133,8 @@ const BASE_SHAPES: BaseShape[] = computeBaseShapes(DIRECTION_STEP);
 /** Padding between sprites in the atlas to prevent texture bleed. */
 const PACK_PAD = 1;
 
-/** Expected number of unique route labels (~150 in practice, mostly 3-digit). */
-const EXPECTED_LABEL_COUNT = 150;
+/** Reserve room for route labels, most of which have three digits. */
+const EXPECTED_LABEL_COUNT = 160;
 
 // --- Label slot pre-measurement ---
 
@@ -334,7 +334,7 @@ export function computeAtlasDimensions(dpr: number): {
   const width = dpr > 3 ? 2048 : dpr > 1 ? 1024 : 512;
 
   // Shape area: compute exact tight size for each base sprite, summed
-  // across (label length x highlight) combinations.
+  // across label lengths. Highlighting shares the same sprites.
   let shapeArea = 0;
   for (const labelLength of LABEL_LENGTHS) {
     const sizes = computeShapeSizes(labelLength, dpr);
@@ -351,8 +351,7 @@ export function computeAtlasDimensions(dpr: number): {
       );
       const tightW = fullW - bounds.left - bounds.right;
       const tightH = fullH - bounds.top - bounds.bottom;
-      // x2 for highlighted + non-highlighted.
-      shapeArea += 2 * (tightW + PACK_PAD) * (tightH + PACK_PAD);
+      shapeArea += (tightW + PACK_PAD) * (tightH + PACK_PAD);
     }
   }
 
@@ -727,24 +726,19 @@ export class MarkerAtlas {
 
   // --- Shape key ---
 
-  private static shapeKey(
-    labelLength: number,
-    deg: number | null,
-    highlighted: boolean,
-  ): string {
-    return `s-${labelLength}-${deg}-${highlighted ? 1 : 0}`;
+  private static shapeKey(labelLength: number, deg: number | null): string {
+    return `s-${labelLength}-${deg}`;
   }
 
   // --- Pre-render all shapes ---
 
   private renderAllShapes() {
-    // Collect every (label length, base shape, highlight) triplet we'll
+    // Collect every (label length, base shape) pair we'll
     // render, compute its tight bounds analytically, and sort by tight
     // height so the strip-packer places the tallest rows first.
     type ShapeItem = {
       shapeIdx: number;
       labelLength: number;
-      highlighted: boolean;
       fullW: number;
       fullH: number;
       bounds: TightBounds;
@@ -765,18 +759,15 @@ export class MarkerAtlas {
           baseDeg,
           this.dpr,
         );
-        for (const highlighted of [false, true]) {
-          pending.push({
-            shapeIdx,
-            labelLength,
-            highlighted,
-            fullW,
-            fullH,
-            bounds,
-            draw: (ctx, cx, cy) =>
-              this.drawShapeOnCtx(ctx, cx, cy, sizes, baseDeg),
-          });
-        }
+        pending.push({
+          shapeIdx,
+          labelLength,
+          fullW,
+          fullH,
+          bounds,
+          draw: (ctx, cx, cy) =>
+            this.drawShapeOnCtx(ctx, cx, cy, sizes, baseDeg),
+        });
       }
     }
 
@@ -809,11 +800,7 @@ export class MarkerAtlas {
       );
       const shape = BASE_SHAPES[item.shapeIdx];
       for (const variant of shape.variants) {
-        const key = MarkerAtlas.shapeKey(
-          item.labelLength,
-          variant.deg,
-          item.highlighted,
-        );
+        const key = MarkerAtlas.shapeKey(item.labelLength, variant.deg);
         this.shapes.set(key, {
           x: baseEntry.x,
           y: baseEntry.y,
@@ -898,11 +885,7 @@ export class MarkerAtlas {
   }
 
   /** Get the atlas entry for a shape sprite. Direction is rounded internally. */
-  getShape(
-    labelLength: number,
-    directionDeg: number | null,
-    highlighted: boolean,
-  ): AtlasEntry {
+  getShape(labelLength: number, directionDeg: number | null): AtlasEntry {
     let roundedDeg: number | null = null;
     if (directionDeg != null) {
       roundedDeg =
@@ -910,7 +893,7 @@ export class MarkerAtlas {
           360) %
         360;
     }
-    const key = MarkerAtlas.shapeKey(labelLength, roundedDeg, highlighted);
+    const key = MarkerAtlas.shapeKey(labelLength, roundedDeg);
     const entry = this.shapes.get(key);
     if (!entry) {
       throw new Error(`Shape not found: ${key}`);

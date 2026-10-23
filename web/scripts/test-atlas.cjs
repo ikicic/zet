@@ -58,12 +58,9 @@ module.exports = function atlasTests() {
     for (const length of new Set(
       window.atlasRouteLabels.map((s) => s.length),
     )) {
-      remember(atlas.getShape(length, null, false));
-      remember(atlas.getShape(length, null, true));
-      for (let angle = 0; angle < 360; angle += 12) {
-        remember(atlas.getShape(length, angle, false));
-        remember(atlas.getShape(length, angle, true));
-      }
+      remember(atlas.getShape(length, null));
+      for (let angle = 0; angle < 360; angle += 12)
+        remember(atlas.getShape(length, angle));
     }
     for (const label of window.atlasRouteLabels) {
       const entry = atlas.getOrCreateLabel(label);
@@ -84,6 +81,11 @@ module.exports = function atlasTests() {
       atlas.canvas.width === width && atlas.canvas.height === height,
       "The synthetic route-label set forced an atlas resize",
     );
+    if (dpr === 3.25)
+      check(
+        width * height * 4 < 5 * 1024 * 1024,
+        "Atlas exceeded its 5 MiB regression budget",
+      );
     passed.push(
       `DPR ${dpr}: all ${window.atlasRouteLabels.length} synthetic labels and directions fit without growth or overwriting sprites; one reusable scratch canvas`,
     );

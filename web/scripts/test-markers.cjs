@@ -100,14 +100,13 @@ module.exports = async function markerTests() {
         gl.clear(gl.COLOR_BUFFER_BIT);
         renderer.beginFrame(8);
         for (const [i, angle] of [12, 168, 192, 348].entries()) {
-          const highlighted = i >= 2;
           if (i === 2) renderer.finishUnselectedMarkers();
           const x = 45 + (i % 2) * 55,
             y = 45 + Math.floor(i / 2) * 55;
           renderer.addInstance(
             x,
             y,
-            atlas.getShape(label.length, angle, highlighted),
+            atlas.getShape(label.length, angle),
             [0.1, 0.3, 0.5, 0.7],
           );
           renderer.addInstance(
@@ -187,12 +186,7 @@ module.exports = async function markerTests() {
     };
     renderer.setAtlas(atlas, 2);
     renderer.beginFrame(2);
-    renderer.addInstance(
-      80,
-      80,
-      atlas.getShape(1, null, false),
-      [0.1, 0.3, 0.5, 1],
-    );
+    renderer.addInstance(80, 80, atlas.getShape(1, null), [0.1, 0.3, 0.5, 1]);
     renderer.addInstance(80, 80, atlas.getOrCreateLabel("6"), [1, 1, 1, 1]);
     renderer.finishUnselectedMarkers();
     renderer.render(gl, {});
