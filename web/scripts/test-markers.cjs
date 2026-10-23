@@ -509,8 +509,11 @@ module.exports = async function markerTests() {
           reject(event.error);
         });
       });
+      let clickedVehicle;
       vehicles = new VehicleLayer(map, {
-        onVehicleClick() {},
+        onVehicleClick(vehicle) {
+          clickedVehicle = vehicle;
+        },
         onNothingClick() {},
       });
       const coordinates = (points) =>
@@ -623,8 +626,9 @@ module.exports = async function markerTests() {
       );
 
       const selected = vehicle(7, [[110, 100]]);
+      const overlapping = vehicle(7, [[110, 100]]);
       const sameRoute = vehicle(7, [[45, 55]]);
-      const selectionFleet = [selected, sameRoute, fleet[0]];
+      const selectionFleet = [selected, overlapping, sameRoute, fleet[0]];
       const selectionFilter = new Set([6]);
       vehicles.setData(selectionFleet, selectionFilter, 7, shape, selected);
       await new Promise((resolve) => map.once("render", resolve));
@@ -632,12 +636,34 @@ module.exports = async function markerTests() {
       const selectedPixel = pixelAt(selectionPixels, 110, 106);
       check(
         red(selectedPixel),
-        `${type}: clicked vehicle lost its original red fill`,
+        `${type}: clicked vehicle is not distinct or was covered by another marker`,
       );
       const routePixel = pixelAt(selectionPixels, 45, 61);
       check(
         red(routePixel),
         `${type}: other vehicles on the selected route lost their original red highlight`,
+      );
+      check(
+        vehicles.lastRendered.at(-1).vehicle === selected,
+        `${type}: clicked vehicle was not drawn last`,
+      );
+      map.fire("click", { point: { x: 110, y: 100 } });
+      check(
+        clickedVehicle === selected,
+        `${type}: overlap hit-testing ignored the topmost vehicle`,
+      );
+
+      // Switching vehicles on the same route must invalidate the cached frame.
+      vehicles.setData(selectionFleet, selectionFilter, 7, shape, overlapping);
+      await new Promise((resolve) => map.once("render", resolve));
+      check(
+        vehicles.lastRendered.at(-1).vehicle === overlapping,
+        `${type}: switching selection on the same route did not redraw`,
+      );
+      map.fire("click", { point: { x: 110, y: 100 } });
+      check(
+        clickedVehicle === overlapping,
+        `${type}: hit-testing retained the previous selection`,
       );
       vehicles.setData(selectionFleet, selectionFilter, 7, shape, null);
       await new Promise((resolve) => map.once("render", resolve));
@@ -665,7 +691,7 @@ module.exports = async function markerTests() {
         `${type}: selected marker has no visible white outline`,
       );
       passed.push(
-        `${type}: clicked vehicle has a white outline that clears on deselection`,
+        `${type}: clicked vehicle is distinct, above overlapping markers and first in hit-testing`,
       );
       passed.push(
         `MapLibre ${type}: trails, routes, stops, filtering and drawing order`,

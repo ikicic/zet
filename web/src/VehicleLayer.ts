@@ -324,6 +324,7 @@ export class VehicleLayer {
     const dpr = getMapDpr();
     const unselected: Vehicle[] = [];
     const highlighted: Vehicle[] = [];
+    let selected: Vehicle | null = null;
 
     for (const vehicle of this.vehicles) {
       const isHighlighted =
@@ -335,7 +336,9 @@ export class VehicleLayer {
         !this.filterSelection.has(vehicle.routeId);
       if (hidden && !isHighlighted) continue;
 
-      if (isHighlighted) {
+      if (vehicle === this.selectedVehicle) {
+        selected = vehicle;
+      } else if (isHighlighted) {
         highlighted.push(vehicle);
       } else {
         unselected.push(vehicle);
@@ -346,7 +349,11 @@ export class VehicleLayer {
     highlighted.sort((a, b) => b.routeId - a.routeId);
 
     this.markerLayer.beginFrame(
-      2 * (unselected.length + highlighted.length + this.debugLabels.length),
+      2 *
+        (unselected.length +
+          highlighted.length +
+          this.debugLabels.length +
+          (selected ? 1 : 0)),
     );
     this.lastRendered = [];
 
@@ -422,6 +429,8 @@ export class VehicleLayer {
       ]);
       this.markerLayer.addInstance(x * dpr, y * dpr, labelEntry, [1, 1, 1, 1]);
     }
+    // Draw and hit-test the clicked vehicle above every other marker.
+    if (selected) addVehicle(selected, true);
   }
 
   private handleClick(e: maplibregl.MapMouseEvent) {
