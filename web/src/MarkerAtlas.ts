@@ -625,6 +625,7 @@ export class MarkerAtlas {
    * Canvas 2D shadow rendering from leaking between packed sprites.
    */
   private placeSprite(
+    scratchCtx: CanvasRenderingContext2D,
     fullW: number,
     fullH: number,
     bounds: TightBounds,
@@ -642,10 +643,8 @@ export class MarkerAtlas {
     // space around the full sprite so the blur kernel is fully rasterized
     // before we crop its tight bounds into the atlas.
     const scratchPadding = Math.ceil(12 * this.dpr);
-    const scratch = document.createElement("canvas");
-    scratch.width = fullW + 2 * scratchPadding;
-    scratch.height = fullH + 2 * scratchPadding;
-    const scratchCtx = scratch.getContext("2d")!;
+    const scratch = scratchCtx.canvas;
+    scratchCtx.clearRect(0, 0, scratch.width, scratch.height);
     draw(scratchCtx, scratchPadding + fullW / 2, scratchPadding + fullH / 2);
 
     this.ctx.drawImage(
@@ -787,12 +786,22 @@ export class MarkerAtlas {
       return bh - ah;
     });
 
+    // Reuse one backing store for every shape, including its shadow padding.
+    const scratchPadding = Math.ceil(12 * this.dpr);
+    const scratch = document.createElement("canvas");
+    scratch.width =
+      Math.max(...pending.map((item) => item.fullW)) + 2 * scratchPadding;
+    scratch.height =
+      Math.max(...pending.map((item) => item.fullH)) + 2 * scratchPadding;
+    const scratchCtx = scratch.getContext("2d")!;
+
     // Render each base sprite, then register entries for every variant
     // (the base itself plus its mirror images) by reusing the base's
     // (x, y, w, h) and setting flipX/flipY flags. Variants cost nothing
     // extra in atlas memory.
     for (const item of pending) {
       const baseEntry = this.placeSprite(
+        scratchCtx,
         item.fullW,
         item.fullH,
         item.bounds,
@@ -817,6 +826,8 @@ export class MarkerAtlas {
         });
       }
     }
+    // Scratch pixels are no longer needed once the atlas has been assembled.
+    scratch.width = scratch.height = 0;
   }
 
   // --- Draw a single shape sprite on a given context ---

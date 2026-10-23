@@ -8,6 +8,13 @@ const http = require("node:http");
 const { spawn } = require("node:child_process");
 const ts = require("typescript");
 const markerTests = require("./test-markers.cjs");
+const atlasTests = require("./test-atlas.cjs");
+// Synthetic labels exercise the full capacity and all supported digit lengths.
+const atlasRouteLabels = [
+  ...Array.from({ length: 9 }, (_, i) => String(i + 1)),
+  ...Array.from({ length: 10 }, (_, i) => String(i + 10)),
+  ...Array.from({ length: 141 }, (_, i) => String(i + 700)),
+];
 const selectionTests = require("./test-selection.cjs");
 const retryTests = require("./test-async-retries.cjs");
 const vehicleDetailsTests = require("./test-vehicle-details.cjs");
@@ -318,6 +325,7 @@ async function browserTests() {
       proto.getShaderPrecisionFormat = getShaderPrecisionFormat;
     }
   });
+  passed.push(...window.runAtlasTests());
   passed.push(...(await window.runMarkerTests()));
   passed.push(...(await window.runSelectionTests()));
   passed.push(...(await window.runRetryTests()));
@@ -391,6 +399,8 @@ async function main() {
       return cache[name];
     }
     window.markerModules = {...load('./WebGLMarkerRenderer'), ...load('./MarkerAtlas'), ...load('./VehicleLayer')};
+    window.atlasRouteLabels = ${JSON.stringify(atlasRouteLabels)};
+    window.runAtlasTests = ${atlasTests.toString()};
     window.runMarkerTests = ${markerTests.toString()};
     window.selectionModules = {React: load('react'), ...load('react-dom/client'), ...load('./useAsyncData'), ...load('./fetchJson'), ...load('./Data')};
     window.runSelectionTests = ${selectionTests.toString()};
