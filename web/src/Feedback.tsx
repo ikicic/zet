@@ -85,8 +85,8 @@ export function FeedbackForm({
       <input
         className="feedback-email"
         type="email"
-        aria-label="E-mail (ako želite odgovor)"
-        placeholder="E-mail (ako želite odgovor)"
+        aria-label="E-mail (da Vam se po potrebi mogu javiti)"
+        placeholder="E-mail (da Vam se po potrebi mogu javiti)"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         maxLength={100}
