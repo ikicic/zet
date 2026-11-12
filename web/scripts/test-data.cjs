@@ -58,7 +58,10 @@ const withoutDelays = api.decompressRealTimeState({
 assert.equal(withoutDelays.vehicles[0].reportDelay, null);
 for (const [age, invalid] of [
   [-3, false],
-  [-4, true],
+  [-4, false],
+  [-6, false],
+  [-10, false],
+  [-11, true],
   [-86400, true],
   [1000, true],
   [15, false],

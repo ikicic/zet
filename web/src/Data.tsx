@@ -117,7 +117,8 @@ class StaticReferenceSystem {
 
 const STATIC_REFERENCE_SYSTEM = new StaticReferenceSystem(6, 45.815, 15.9819);
 
-const FUTURE_TIMESTAMP_TOLERANCE_SECONDS = 3;
+// ZET vehicle timestamps can be several seconds ahead of the feed header.
+const FUTURE_TIMESTAMP_TOLERANCE_SECONDS = 10;
 
 function decompressVehicles(
   data: CompressedVehicles,
