@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import urlopen
 import argparse
@@ -32,9 +34,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAX_SNAPSHOT_COUNT = 10000
-MIN_UNCHANGED_DELAY = 1.0
+MIN_UNCHANGED_DELAY = 1.5
 MAX_UNCHANGED_DELAY = 10.0
 UNCHANGED_BACKOFF_FACTOR = 1.01
+MAX_RETRY_AFTER_DELAY = 30.0
+
+
+def retry_after_delay(value: str | None) -> float | None:
+    """Parse Retry-After and clamp it between MIN_UNCHANGED_DELAY and
+    MAX_RETRY_AFTER_DELAY."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isascii() and value.isdigit():
+        retry_after = int(value)
+    else:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            retry_after = retry_at.timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            return None
+    # Leave a one-second margin around the retry deadline. This controls request
+    # eligibility; it does not guarantee that a new snapshot has been published.
+    return max(MIN_UNCHANGED_DELAY,
+               min(retry_after + 1, MAX_RETRY_AFTER_DELAY))
 
 @dataclass
 class SnapshotData:
@@ -137,10 +160,11 @@ def fetch_url(url: str) -> bytes:
 
 def try_fetch_url(url: str) -> bytes | None:
     """Fetch the URL and return the binary content."""
+    requested_at = datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')
     try:
         return fetch_url(url)
     except Exception as e:
-        logger.error(f"Error fetching URL: {e}")
+        logger.error(f"{requested_at}: Error fetching URL {url}: {e}")
         return None
 
 
@@ -342,7 +366,19 @@ class Fetcher:
 
         try:
             while self.running:
-                data = try_fetch_url(self.realtime_url)
+                retry_delay = None
+                requested_at = datetime.datetime.now().astimezone().isoformat(
+                    timespec='milliseconds')
+                try:
+                    data = fetch_url(self.realtime_url)
+                except HTTPError as e:
+                    retry_delay = retry_after_delay(e.headers.get('Retry-After'))
+                    logger.error(f"{requested_at}: Error fetching GTFS: {e}")
+                    e.close()
+                    data = None
+                except Exception as e:
+                    logger.error(f"{requested_at}: Error fetching GTFS: {e}")
+                    data = None
                 if not self.running:
                     break
 
@@ -365,9 +401,14 @@ class Fetcher:
                         # so we don't wait before reloading the realtime data.
                         current_delay = 0
                 else:
-                    logger.error("No data fetched. Skipping snapshot.")
-                    # If fetching failed, use exponential backoff
-                    current_delay = min(current_delay * 2, 20)
+                    if retry_delay is not None:
+                        current_delay = retry_delay
+                        logger.info(f"Retry-After: waiting {current_delay}s")
+                    else:
+                        # Without a valid Retry-After, use exponential backoff.
+                        current_delay = max(
+                            MIN_UNCHANGED_DELAY, min(current_delay * 2, 20))
+                        logger.error("No data fetched. Skipping snapshot.")
 
                 self.sleep(current_delay)
         finally:
@@ -392,7 +433,8 @@ class Fetcher:
         data = try_fetch_url(self.static_url)
         if self.running and data is not None:
             self.store_static_snapshot(data)
-        return True
+            return True
+        return False
 
     def sleep(self, delay: float):
         """Sleep for the given delay, but check self.running periodically."""
