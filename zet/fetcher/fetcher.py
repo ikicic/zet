@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError
 from urllib.parse import urljoin
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 import argparse
 import csv
 import datetime
@@ -153,16 +153,67 @@ class WebSocketSnapshotServer(WebSocketServer):
         super().update_data("static-snapshot", data, max_history=3)
 
 
-def fetch_url(url: str) -> bytes:
-    with urlopen(url, timeout=30) as response:
-        return response.read()
+@dataclass(frozen=True)
+class CachedHttpResponse:
+    response_url: str
+    etag: str
+    data: bytes
 
 
-def try_fetch_url(url: str) -> bytes | None:
+class _ConditionalRedirectHandler(HTTPRedirectHandler):
+    def __init__(self, cached: CachedHttpResponse | None):
+        self.cached = cached
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if (redirected is not None and self.cached is not None
+                and redirected.full_url == self.cached.response_url):
+            redirected.add_unredirected_header('If-None-Match', self.cached.etag)
+        return redirected
+
+
+def _open_url(request: Request, cached: CachedHttpResponse | None):
+    return build_opener(_ConditionalRedirectHandler(cached)).open(request, timeout=30)
+
+
+def fetch_url(url: str, *, cache: dict[str, CachedHttpResponse] | None = None) -> bytes:
+    """Keep one response per configured URL; scope its validator to the final URL."""
+    cached = cache.get(url) if cache is not None else None
+    request = Request(url)
+    if cached is not None and url == cached.response_url:
+        # Validators belong to a resource, not to other URLs it redirects to.
+        request.add_unredirected_header('If-None-Match', cached.etag)
+    try:
+        response = _open_url(request, cached)
+    except HTTPError as error:
+        with error:
+            response_url = error.geturl()
+            if (error.code != 304 or cached is None
+                    or response_url != cached.response_url):
+                raise
+            # A 304 has no payload. Reuse the exact previous bytes so snapshot
+            # storage and polling treat this as an ordinary unchanged response.
+            if cache is not None:
+                cache[url] = CachedHttpResponse(
+                    response_url, error.headers.get('ETag', cached.etag), cached.data)
+            return cached.data
+    with response:
+        data = response.read()
+        if cache is not None:
+            etag = response.headers.get('ETag')
+            if etag:
+                cache[url] = CachedHttpResponse(response.geturl(), etag, data)
+            else:
+                # A new response without a validator supersedes the old ETag.
+                cache.pop(url, None)
+        return data
+
+
+def try_fetch_url(url: str, *, cache: dict[str, CachedHttpResponse] | None = None) -> bytes | None:
     """Fetch the URL and return the binary content."""
     requested_at = datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')
     try:
-        return fetch_url(url)
+        return fetch_url(url, cache=cache)
     except Exception as e:
         logger.error(f"{requested_at}: Error fetching URL {url}: {e}")
         return None
@@ -190,6 +241,7 @@ class Fetcher:
 
         self.current_realtime_snapshot: RealtimeSnapshotData | None = None
         self.current_static_snapshot: StaticSnapshotData | None = None
+        self._http_cache: dict[str, CachedHttpResponse] = {}
         self.notifier = RateLimitedNotifier()
 
         self._last_static_fetch: datetime.datetime | None = None
@@ -370,7 +422,7 @@ class Fetcher:
                 requested_at = datetime.datetime.now().astimezone().isoformat(
                     timespec='milliseconds')
                 try:
-                    data = fetch_url(self.realtime_url)
+                    data = fetch_url(self.realtime_url, cache=self._http_cache)
                 except HTTPError as e:
                     retry_delay = retry_after_delay(e.headers.get('Retry-After'))
                     logger.error(f"{requested_at}: Error fetching GTFS: {e}")
@@ -430,7 +482,7 @@ class Fetcher:
             return False
 
         self._last_static_fetch = now
-        data = try_fetch_url(self.static_url)
+        data = try_fetch_url(self.static_url, cache=self._http_cache)
         if self.running and data is not None:
             self.store_static_snapshot(data)
             return True
